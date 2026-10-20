@@ -6,6 +6,14 @@ from netpulse_core import PortStatsReport
 logger = logging.getLogger(__name__)
 
 
+class PortStatsWriteError(Exception):
+    pass
+
+
+class TransientPortStatsWriteError(PortStatsWriteError):
+    pass
+
+
 class PortStatsRepository(Protocol):
     async def save(self, report: PortStatsReport) -> None: ...
 

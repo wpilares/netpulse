@@ -6,7 +6,7 @@ from typing import Protocol
 import httpx2
 from pydantic import ValidationError
 
-from netpulse_collector.repository import PortStatsRepository
+from netpulse_collector.repository import PortStatsRepository, PortStatsWriteError
 from netpulse_core import PortStatsReport
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ async def run_polling(
     while not stop.is_set():
         try:
             await poll_once(source, repository)
-        except (httpx2.HTTPError, ValidationError):
+        except (httpx2.HTTPError, ValidationError, PortStatsWriteError):
             logger.exception("polling cycle failed")
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(stop.wait(), timeout=interval_seconds)

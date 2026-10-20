@@ -6,6 +6,7 @@ import pytest
 
 from netpulse_collector.controller_client import ControllerClient
 from netpulse_collector.poller import poll_once, run_polling
+from netpulse_collector.repository import PortStatsWriteError
 from netpulse_core import PortStatsReport
 
 REPORT_PAYLOAD = {
@@ -88,3 +89,30 @@ async def test_run_polling_survives_failures_until_stopped() -> None:
     )
 
     assert len(repository.saved) == 1
+
+
+class FailingOnceRepository:
+    def __init__(self) -> None:
+        self.attempts = 0
+
+    async def save(self, report: PortStatsReport) -> None:
+        self.attempts += 1
+        if self.attempts == 1:
+            raise PortStatsWriteError("database unavailable")
+
+
+async def test_run_polling_survives_repository_failures() -> None:
+    repository = FailingOnceRepository()
+    stop = asyncio.Event()
+
+    def handler(_: httpx2.Request) -> httpx2.Response:
+        if repository.attempts == 1:
+            stop.set()
+        return httpx2.Response(200, json=REPORT_PAYLOAD)
+
+    await asyncio.wait_for(
+        run_polling(_client(handler), repository, interval_seconds=0.01, stop=stop),
+        timeout=1,
+    )
+
+    assert repository.attempts == 2
