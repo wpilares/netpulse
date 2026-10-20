@@ -1,0 +1,23 @@
+[project]
+name = "netpulse-collector"
+version = "0.1.0"
+description = "NetPulse telemetry collector polling the SDN controller"
+license = "MIT"
+requires-python = ">=3.14"
+dependencies = [
+    "httpx2>=2.15.1",
+    "netpulse-core",
+]
+
+[project.scripts]
+netpulse-collector = "netpulse_collector.__main__:main"
+
+[tool.uv.sources]
+netpulse-core = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.13.0,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "netpulse_collector"

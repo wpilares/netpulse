@@ -1,0 +1,102 @@
+name: netpulse
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:2.30.2-pg18
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-netpulse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-netpulse}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - timescaledb-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    logging: *default-logging
+
+  controller:
+    build:
+      context: services/controller
+    environment:
+      NETPULSE_CONTROLLER_OPENFLOW_PORT: "6653"
+      NETPULSE_CONTROLLER_REST_HOST: 0.0.0.0
+      NETPULSE_CONTROLLER_REST_PORT: "8080"
+      NETPULSE_CONTROLLER_STATS_INTERVAL_SECONDS: ${CONTROLLER_STATS_INTERVAL_SECONDS:-5}
+    ports:
+      - "${CONTROLLER_REST_PORT:-8080}:8080"
+    restart: unless-stopped
+    logging: *default-logging
+
+  network:
+    build:
+      context: network
+    privileged: true
+    environment:
+      NETPULSE_NETWORK_CONTROLLER_HOST: controller
+      NETPULSE_NETWORK_CONTROLLER_PORT: "6653"
+      NETPULSE_NETWORK_TREE_DEPTH: ${NETWORK_TREE_DEPTH:-2}
+      NETPULSE_NETWORK_TREE_FANOUT: ${NETWORK_TREE_FANOUT:-2}
+      NETPULSE_NETWORK_OVS_DATAPATH: ${NETWORK_OVS_DATAPATH:-user}
+    depends_on:
+      controller:
+        condition: service_healthy
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging: *default-logging
+
+  collector:
+    build:
+      context: .
+      dockerfile: services/collector/Dockerfile
+    environment:
+      NETPULSE_COLLECTOR_CONTROLLER_URL: http://controller:8080
+      NETPULSE_COLLECTOR_POLL_INTERVAL_SECONDS: ${COLLECTOR_POLL_INTERVAL_SECONDS:-5}
+      NETPULSE_COLLECTOR_LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      controller:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    environment:
+      NETPULSE_API_HOST: 0.0.0.0
+      NETPULSE_API_PORT: "8000"
+      NETPULSE_API_LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      NETPULSE_API_DATABASE_URL: postgresql://${POSTGRES_USER:-netpulse}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@timescaledb:5432/${POSTGRES_DB:-netpulse}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+
+  web:
+    build:
+      context: web
+    ports:
+      - "${WEB_PORT:-3000}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+
+volumes:
+  timescaledb-data:

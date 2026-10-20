@@ -1,0 +1,25 @@
+[project]
+name = "netpulse-api"
+version = "0.1.0"
+description = "NetPulse REST and WebSocket API"
+license = "MIT"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.150.0",
+    "netpulse-core",
+    "psycopg[binary]>=3.3.6",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+netpulse-api = "netpulse_api.__main__:main"
+
+[tool.uv.sources]
+netpulse-core = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.13.0,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "netpulse_api"
