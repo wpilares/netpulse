@@ -26,6 +26,23 @@ services:
     restart: unless-stopped
     logging: *default-logging
 
+  migrate:
+    image: ghcr.io/amacneil/dbmate:2.36.0
+    command: ["up"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-netpulse}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@timescaledb:5432/${POSTGRES_DB:-netpulse}?sslmode=disable
+      DBMATE_MIGRATIONS_DIR: /db/migrations
+      DBMATE_NO_DUMP_SCHEMA: "true"
+      DBMATE_WAIT: "true"
+      DBMATE_WAIT_TIMEOUT: 60s
+    volumes:
+      - ./db/migrations:/db/migrations:ro
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    restart: "no"
+    logging: *default-logging
+
   controller:
     build:
       context: services/controller
@@ -64,9 +81,13 @@ services:
       NETPULSE_COLLECTOR_CONTROLLER_URL: http://controller:8080
       NETPULSE_COLLECTOR_POLL_INTERVAL_SECONDS: ${COLLECTOR_POLL_INTERVAL_SECONDS:-5}
       NETPULSE_COLLECTOR_LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      NETPULSE_COLLECTOR_REPOSITORY: ${COLLECTOR_REPOSITORY:-timescale}
+      NETPULSE_COLLECTOR_DATABASE_URL: postgresql://${POSTGRES_USER:-netpulse}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@timescaledb:5432/${POSTGRES_DB:-netpulse}
     depends_on:
       controller:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
     logging: *default-logging
 
@@ -82,8 +103,8 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
-      timescaledb:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
     logging: *default-logging
 
