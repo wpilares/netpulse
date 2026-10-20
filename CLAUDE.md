@@ -4,7 +4,7 @@ Project rules for AI-assisted work in NetPulse.
 
 ## Code rules
 
-- **No code comments.** Applies to Python, TypeScript, YAML, Dockerfiles, Makefile and config. Names and structure carry intent; if something needs a comment, refactor it.
+- **No code comments.** Applies to Python, TypeScript, SQL, YAML, Dockerfiles, Makefile and config. Names and structure carry intent; if something needs a comment, refactor it. The only exception is dbmate's `-- migrate:up` and `-- migrate:down` directives in `db/migrations`.
 - **No `any` and no untyped code.** TypeScript forbids `any` in every form; use precise types, generics or `unknown` with narrowing. Python is fully annotated and passes `mypy --strict`; `Any` is allowed only at an untyped third-party boundary (OS-Ken, Mininet) and stays inside that adapter module.
 - **Zero lint and type errors.** Fix issues properly; never silence them with ignore comments.
 - **Test first for logic.** For behavior with a clear expected outcome, write the failing pytest or Vitest test, watch it fail, then implement.
@@ -36,3 +36,5 @@ bun run build
 ```
 
 Compose must stay valid: `docker compose --env-file .env.example config --quiet`.
+
+Storage changes also need `make test-integration` (TimescaleDB in Docker; pass `ENV_FILE=.env.example` without a `.env`). Schema changes go in a new timestamped file in `db/migrations` with both `up` and `down` sections; never edit an applied migration.

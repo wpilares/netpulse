@@ -1,7 +1,9 @@
 CONTROLLER := services/controller
 WEB := web
+ENV_FILE ?= .env
+COMPOSE := docker compose --env-file $(ENV_FILE)
 
-.PHONY: install lint format typecheck test up down ci
+.PHONY: install lint format typecheck test test-integration migrate up down ci
 
 install:
 	uv sync --all-packages --locked
@@ -29,11 +31,21 @@ test:
 	uv run --directory $(CONTROLLER) pytest
 	cd $(WEB) && bun run test
 
+test-integration:
+	$(COMPOSE) up --detach --wait timescaledb
+	$(COMPOSE) run --rm migrate
+	set -a && . ./$(ENV_FILE) && set +a && \
+	NETPULSE_TEST_DATABASE_URL="postgresql://$${POSTGRES_USER}:$${POSTGRES_PASSWORD}@localhost:$${POSTGRES_PORT:-5432}/$${POSTGRES_DB}" \
+	uv run pytest -m integration
+
+migrate:
+	$(COMPOSE) run --rm migrate
+
 up:
-	docker compose up --build --detach
+	$(COMPOSE) up --build --detach
 
 down:
-	docker compose down
+	$(COMPOSE) down
 
 ci: install lint typecheck test
 	cd $(WEB) && bun run build

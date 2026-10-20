@@ -44,6 +44,48 @@ jobs:
       - name: Test network package on the container interpreter
         run: uv run --directory network --python 3.13 --isolated --no-project --with pytest pytest
 
+  integration:
+    name: Integration (TimescaleDB)
+    runs-on: ubuntu-latest
+    services:
+      timescaledb:
+        image: timescale/timescaledb:2.30.2-pg18
+        env:
+          POSTGRES_USER: netpulse
+          POSTGRES_PASSWORD: netpulse
+          POSTGRES_DB: netpulse
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U netpulse -d netpulse"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://netpulse:netpulse@localhost:5432/netpulse?sslmode=disable
+      NETPULSE_TEST_DATABASE_URL: postgresql://netpulse:netpulse@localhost:5432/netpulse
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          version: "0.13.2"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install dependencies
+        run: uv sync --all-packages --locked
+      - name: Apply, roll back and reapply migrations
+        run: |
+          dbmate() {
+            docker run --rm --network host -v "$PWD/db:/db" -e DATABASE_URL \
+              ghcr.io/amacneil/dbmate:2.36.0 --no-dump-schema --wait "$@"
+          }
+          dbmate up
+          dbmate rollback
+          dbmate rollback
+          dbmate up
+      - name: Integration tests
+        run: uv run pytest -m integration
+
   web:
     name: Web
     runs-on: ubuntu-latest
