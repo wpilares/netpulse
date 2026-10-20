@@ -6,12 +6,21 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+coverage/
 dist/
 build/
 *.egg-info/
 node_modules/
-.env
-.DS_Store
-.codegraph/
+*.log
 
+.env
+.env.*
+!.env.example
+
+.DS_Store
+.idea/
+.vscode/
+
+.codegraph/
+.atl/
 odd/
