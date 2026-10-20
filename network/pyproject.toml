@@ -1,0 +1,19 @@
+[project]
+name = "netpulse-network"
+version = "0.1.0"
+description = "Mininet topology emulating the monitored NetPulse network"
+license = "MIT"
+requires-python = ">=3.13"
+dependencies = []
+
+[build-system]
+requires = ["uv_build>=0.13.0,<0.14"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "netpulse_network"
+
+[tool.pytest]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = ["--import-mode=importlib", "--strict-markers", "--strict-config", "-p", "no:cacheprovider"]
