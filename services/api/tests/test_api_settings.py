@@ -54,3 +54,31 @@ def test_live_settings_reject_non_positive_values(
 
     with pytest.raises(ValidationError):
         ApiSettings()
+
+
+def test_controller_is_not_configured_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("CONTROLLER_URL", "CONTROLLER_TIMEOUT_SECONDS"):
+        monkeypatch.delenv(f"NETPULSE_API_{name}", raising=False)
+
+    settings = ApiSettings()
+
+    assert settings.controller_url is None
+    assert settings.controller_timeout_seconds == 2.0
+
+
+def test_controller_url_is_read_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NETPULSE_API_CONTROLLER_URL", "http://controller:8080")
+    monkeypatch.setenv("NETPULSE_API_CONTROLLER_TIMEOUT_SECONDS", "0.5")
+
+    settings = ApiSettings()
+
+    assert settings.controller_url is not None
+    assert settings.controller_url.host == "controller"
+    assert settings.controller_timeout_seconds == 0.5
+
+
+def test_controller_timeout_must_be_positive(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NETPULSE_API_CONTROLLER_TIMEOUT_SECONDS", "0")
+
+    with pytest.raises(ValidationError):
+        ApiSettings()

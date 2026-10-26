@@ -6,7 +6,7 @@ from wsgiref.types import WSGIEnvironment
 from wsgiref.util import setup_testing_defaults
 
 from netpulse_controller.rest import create_rest_app
-from netpulse_controller.stats_store import PortCounters, StatsStore
+from netpulse_controller.stats_store import PortCounters, PortDescription, StatsStore
 
 type OptExcInfo = tuple[type[BaseException], BaseException, TracebackType] | tuple[None, None, None]
 
@@ -71,3 +71,19 @@ def test_only_get_is_allowed() -> None:
         "405 Method Not Allowed",
         {"error": "method not allowed"},
     )
+
+
+def test_topology_returns_the_store_report() -> None:
+    store = StatsStore()
+    store.record_ports(
+        1, (PortDescription(port_no=1, name="s1-eth1", hw_addr="aa:bb:cc:dd:ee:01"),)
+    )
+    store.record_link(1, 1, 2, 1)
+
+    status, payload = _call(store, "/topology")
+
+    assert status == "200 OK"
+    assert payload == store.topology_report()
+    assert payload["links"] == [
+        {"src": {"dpid": 1, "port_no": 1}, "dst": {"dpid": 2, "port_no": 1}}
+    ]

@@ -1,5 +1,6 @@
 import os
 from datetime import UTC, datetime
+from typing import ClassVar
 
 from os_ken.base import app_manager
 from os_ken.controller import ofp_event
@@ -12,14 +13,24 @@ from os_ken.controller.handler import (
 )
 from os_ken.lib import hub
 from os_ken.ofproto import ofproto_v1_3
+from os_ken.topology import event as topology_event
+from os_ken.topology import switches as topology_switches
 
 from netpulse_controller.rest import create_rest_server
 from netpulse_controller.settings import ControllerSettings
-from netpulse_controller.stats_store import PortCounters, StatsStore
+from netpulse_controller.stats_store import PortCounters, PortDescription, StatsStore
+
+
+def _describe_port(port: topology_switches.Port) -> PortDescription:
+    name = port.name.decode("utf-8", "replace") if isinstance(port.name, bytes) else str(port.name)
+    return PortDescription(port_no=int(port.port_no), name=name, hw_addr=str(port.hw_addr))
 
 
 class NetPulseMonitor(app_manager.OSKenApp):
     OFP_VERSIONS = (ofproto_v1_3.OFP_VERSION,)
+    _CONTEXTS: ClassVar[dict[str, type[app_manager.OSKenApp]]] = {
+        "switches": topology_switches.Switches
+    }
 
     def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
@@ -80,6 +91,39 @@ class NetPulseMonitor(app_manager.OSKenApp):
             for stat in event.msg.body
         )
         self._store.record(event.msg.datapath.id, ports, datetime.now(UTC))
+
+    @set_ev_cls(topology_event.EventSwitchEnter)
+    def record_switch_ports(self, event: topology_event.EventSwitchEnter) -> None:
+        switch = event.switch
+        ports = tuple(_describe_port(port) for port in switch.ports if not port.is_reserved())
+        self._store.record_ports(switch.dp.id, ports)
+
+    @set_ev_cls(topology_event.EventSwitchLeave)
+    def forget_switch(self, event: topology_event.EventSwitchLeave) -> None:
+        self._store.unregister(event.switch.dp.id)
+
+    @set_ev_cls([topology_event.EventPortAdd, topology_event.EventPortModify])
+    def record_port(self, event: topology_event.EventPortBase) -> None:
+        if event.port.is_reserved():
+            return
+        self._store.record_port(event.port.dpid, _describe_port(event.port))
+
+    @set_ev_cls(topology_event.EventPortDelete)
+    def forget_port(self, event: topology_event.EventPortDelete) -> None:
+        self._store.remove_port(event.port.dpid, event.port.port_no)
+
+    @set_ev_cls(topology_event.EventLinkAdd)
+    def record_link(self, event: topology_event.EventLinkAdd) -> None:
+        link = event.link
+        self._store.record_link(link.src.dpid, link.src.port_no, link.dst.dpid, link.dst.port_no)
+        self.logger.info(
+            "link %s:%s -> %s:%s", link.src.dpid, link.src.port_no, link.dst.dpid, link.dst.port_no
+        )
+
+    @set_ev_cls(topology_event.EventLinkDelete)
+    def forget_link(self, event: topology_event.EventLinkDelete) -> None:
+        link = event.link
+        self._store.remove_link(link.src.dpid, link.src.port_no, link.dst.dpid, link.dst.port_no)
 
     def _request_stats_forever(self) -> None:
         while True:

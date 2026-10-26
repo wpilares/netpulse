@@ -10,8 +10,10 @@ from netpulse_api.routes.health import build_health_router
 from netpulse_api.routes.kpis import build_kpis_router
 from netpulse_api.routes.stats import build_stats_router
 from netpulse_api.routes.telemetry_ws import build_telemetry_router
+from netpulse_api.routes.topology import build_topology_router
 from netpulse_api.routes.v1 import build_v1_router
 from netpulse_api.stats import PortStatsQuery
+from netpulse_api.topology import TopologyQuery
 
 SERVICE_VERSION = version("netpulse-api")
 
@@ -24,6 +26,7 @@ def create_app(
     latest_samples: LatestSamplesQuery | None = None,
     link_capacity_bps: int | None = None,
     live_broadcaster: LiveKpiBroadcaster | None = None,
+    topology_query: TopologyQuery | None = None,
     lifespan: Lifespan[FastAPI] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="NetPulse API", version=SERVICE_VERSION, lifespan=lifespan)
@@ -34,4 +37,5 @@ def create_app(
         build_kpis_router(kpi_history, latest_samples, link_capacity_bps=link_capacity_bps)
     )
     app.include_router(build_telemetry_router(SERVICE_VERSION, broadcaster=live_broadcaster))
+    app.include_router(build_topology_router(topology_query))
     return app
