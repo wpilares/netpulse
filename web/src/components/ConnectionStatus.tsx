@@ -1,7 +1,6 @@
 import type { SocketStatus } from "../features/telemetry/useTelemetrySocket";
 import { formatClock } from "../lib/time";
-
-type Tone = "neutral" | "positive" | "warning" | "critical";
+import type { Tone } from "./tone";
 
 export interface ConnectionStatusProps {
   readonly status: SocketStatus;

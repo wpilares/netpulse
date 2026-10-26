@@ -1,4 +1,7 @@
+import { AlertsBadge } from "./components/AlertsBadge";
 import { ConnectionStatus } from "./components/ConnectionStatus";
+import { AlertsPanel } from "./features/alerts/AlertsPanel";
+import { useAlerts } from "./features/alerts/useAlerts";
 import { ApiHealthStatus } from "./features/health/ApiHealthStatus";
 import { SummaryCards } from "./features/kpis/SummaryCards";
 import { SwitchPortsPanel } from "./features/kpis/SwitchPortsPanel";
@@ -24,6 +27,7 @@ export const App = ({ fetcher = browserFetch, createSocket, socketUrl }: AppProp
   });
   const initialSummary = useKpiSummary(fetcher);
   const topology = useTopology(fetcher, TOPOLOGY_REFRESH_MS);
+  const alerts = useAlerts(fetcher, socket);
   const snapshot = socket.latest ?? initialSummary;
 
   return (
@@ -41,12 +45,17 @@ export const App = ({ fetcher = browserFetch, createSocket, socketUrl }: AppProp
             storeUnavailable={socket.storeUnavailable}
             lastUpdateAt={socket.latest?.generated_at ?? socket.lastHeartbeatAt ?? snapshot?.generated_at ?? null}
           />
+          <AlertsBadge summary={alerts.summary} />
         </div>
       </header>
       <main className="shell__main">
         <section className="panel" aria-labelledby="summary-heading">
           <h2 id="summary-heading">Network summary</h2>
           <SummaryCards summary={snapshot?.summary ?? null} />
+        </section>
+        <section className="panel" aria-labelledby="alerts-heading">
+          <h2 id="alerts-heading">Alerts</h2>
+          <AlertsPanel {...alerts} />
         </section>
         <section className="panel" aria-labelledby="topology-heading">
           <h2 id="topology-heading">Topology</h2>

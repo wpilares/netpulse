@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { makeAlert, makeAlertsFrame } from "../alerts/fixtures";
 import { makePort, makeSnapshot } from "./fixtures";
 import { parseKpiSnapshot, parseLiveFrame } from "./frames";
 
@@ -24,9 +25,17 @@ describe("parseLiveFrame", () => {
     expect(frame).toEqual({ type: "kpis", ...snapshot });
   });
 
+  it("parses an alerts frame with its alerts", () => {
+    const frame = makeAlertsFrame([makeAlert(), makeAlert({ id: 2, severity: "critical" })]);
+
+    expect(parseLiveFrame({ ...frame })).toEqual(frame);
+  });
+
   it.each([
     null,
     "kpis",
+    { type: "alerts", generated_at: "2026-10-26T10:00:05Z", alerts: [{ id: 1 }] },
+    { type: "alerts", alerts: [] },
     { type: "unknown" },
     { type: "hello" },
     { type: "heartbeat", at: 12 },

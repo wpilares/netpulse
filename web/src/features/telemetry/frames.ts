@@ -1,4 +1,5 @@
 import { isArrayOf, isNullableNumber, isRecord } from "../../lib/guards";
+import { type AlertList, parseAlertList } from "../alerts/alerts";
 
 export interface PortKpis {
   readonly dpid: number;
@@ -42,13 +43,18 @@ export interface KpiFrame extends KpiSnapshot {
   readonly type: "kpis";
 }
 
+export interface AlertsFrame extends AlertList {
+  readonly type: "alerts";
+}
+
 export type LiveFrame =
   | { readonly type: "hello"; readonly version: string }
   | { readonly type: "pong" }
   | { readonly type: "error"; readonly reason: string }
   | { readonly type: "heartbeat"; readonly at: string }
   | { readonly type: "store_unavailable"; readonly at: string }
-  | KpiFrame;
+  | KpiFrame
+  | AlertsFrame;
 
 const parsePortKpis = (value: unknown): PortKpis | null => {
   if (!isRecord(value)) {
@@ -165,6 +171,10 @@ export const parseLiveFrame = (value: unknown): LiveFrame | null => {
     case "kpis": {
       const snapshot = parseKpiSnapshot(value);
       return snapshot === null ? null : { type: "kpis", ...snapshot };
+    }
+    case "alerts": {
+      const list = parseAlertList(value);
+      return list === null ? null : { type: "alerts", ...list };
     }
     default:
       return null;
