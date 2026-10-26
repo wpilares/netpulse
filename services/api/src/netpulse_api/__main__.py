@@ -12,6 +12,7 @@ from starlette.types import Lifespan
 from netpulse_api.app import create_app
 from netpulse_api.health import PostgresProbe
 from netpulse_api.settings import ApiSettings
+from netpulse_api.timescale_kpis import TimescaleKpiHistoryQuery, TimescaleLatestSamplesQuery
 from netpulse_api.timescale_stats import ConnectionPool, TimescalePortStatsQuery
 
 
@@ -26,7 +27,7 @@ def pool_lifespan(pool: ConnectionPool) -> Lifespan[FastAPI]:
 
 def build_app(settings: ApiSettings) -> FastAPI:
     if settings.database_url is None:
-        return create_app(database_probe=None)
+        return create_app(database_probe=None, link_capacity_bps=settings.link_capacity_bps)
     dsn = settings.database_url.encoded_string()
     pool = AsyncConnectionPool[psycopg.AsyncConnection[TupleRow]](
         dsn,
@@ -40,6 +41,9 @@ def build_app(settings: ApiSettings) -> FastAPI:
     return create_app(
         database_probe=PostgresProbe(dsn, timeout_seconds=settings.database_timeout_seconds),
         port_stats_query=TimescalePortStatsQuery(pool),
+        kpi_history=TimescaleKpiHistoryQuery(pool, link_capacity_bps=settings.link_capacity_bps),
+        latest_samples=TimescaleLatestSamplesQuery(pool),
+        link_capacity_bps=settings.link_capacity_bps,
         lifespan=pool_lifespan(pool),
     )
 
