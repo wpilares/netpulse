@@ -2,6 +2,7 @@ import pytest
 from pydantic import ValidationError
 
 from netpulse_collector.settings import CollectorSettings
+from netpulse_core import AlertPolicy, DetectionConfig
 
 
 def test_defaults_target_the_compose_controller(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -72,4 +73,65 @@ def test_timescale_repository_requires_a_database_url(monkeypatch: pytest.Monkey
     monkeypatch.delenv("NETPULSE_COLLECTOR_DATABASE_URL", raising=False)
 
     with pytest.raises(ValidationError, match="database_url"):
+        CollectorSettings()
+
+
+def test_detection_defaults_match_the_core_models(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in (
+        "DETECTION_ENABLED",
+        "LINK_CAPACITY_BPS",
+        "DETECTION_ALPHA",
+        "DETECTION_WARMUP_SAMPLES",
+        "DETECTION_WARNING_Z",
+        "DETECTION_CRITICAL_Z",
+        "ALERT_RESOLVE_AFTER_SECONDS",
+        "ALERT_COOLDOWN_SECONDS",
+        "ALERT_WEBHOOK_URL",
+    ):
+        monkeypatch.delenv(f"NETPULSE_COLLECTOR_{name}", raising=False)
+
+    settings = CollectorSettings()
+
+    assert settings.detection_enabled is True
+    assert settings.link_capacity_bps == 10_000_000
+    assert settings.alert_webhook_url is None
+    assert settings.detection_config() == DetectionConfig()
+    assert settings.alert_policy() == AlertPolicy()
+
+
+def test_detection_values_are_read_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NETPULSE_COLLECTOR_DETECTION_ENABLED", "false")
+    monkeypatch.setenv("NETPULSE_COLLECTOR_LINK_CAPACITY_BPS", "1000000000")
+    monkeypatch.setenv("NETPULSE_COLLECTOR_DETECTION_ALPHA", "0.5")
+    monkeypatch.setenv("NETPULSE_COLLECTOR_DETECTION_WARMUP_SAMPLES", "3")
+    monkeypatch.setenv("NETPULSE_COLLECTOR_DETECTION_WARNING_Z", "2.5")
+    monkeypatch.setenv("NETPULSE_COLLECTOR_DETECTION_CRITICAL_Z", "4")
+    monkeypatch.setenv("NETPULSE_COLLECTOR_ALERT_RESOLVE_AFTER_SECONDS", "30")
+    monkeypatch.setenv("NETPULSE_COLLECTOR_ALERT_COOLDOWN_SECONDS", "45")
+    monkeypatch.setenv("NETPULSE_COLLECTOR_ALERT_WEBHOOK_URL", "https://hooks.example.test/x")
+
+    settings = CollectorSettings()
+
+    assert settings.detection_enabled is False
+    assert settings.link_capacity_bps == 1_000_000_000
+    assert settings.detection_config() == DetectionConfig(
+        alpha=0.5, warmup_samples=3, warning_z=2.5, critical_z=4.0
+    )
+    assert settings.alert_policy() == AlertPolicy(resolve_after_seconds=30.0, cooldown_seconds=45.0)
+    assert str(settings.alert_webhook_url) == "https://hooks.example.test/x"
+
+
+def test_empty_webhook_url_means_no_webhook(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NETPULSE_COLLECTOR_ALERT_WEBHOOK_URL", "")
+
+    settings = CollectorSettings()
+
+    assert settings.alert_webhook_url is None
+
+
+def test_critical_z_must_exceed_warning_z(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NETPULSE_COLLECTOR_DETECTION_WARNING_Z", "5")
+    monkeypatch.setenv("NETPULSE_COLLECTOR_DETECTION_CRITICAL_Z", "5")
+
+    with pytest.raises(ValidationError, match="critical_z"):
         CollectorSettings()

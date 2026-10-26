@@ -52,7 +52,7 @@ Data flows left to right. The controller requests `OFPPortStatsRequest` from eve
 | Core | `packages/core` | pydantic 2, pydantic-settings | Shared typed telemetry models, KPI computation and settings base |
 | Network | `network` | Mininet, Open vSwitch, iperf3 | Emulated tree topology on shaped links, scheduled traffic between hosts |
 | Controller | `services/controller` | OS-Ken 4 (Python 3.13) | Tracks switches, installs forwarding, discovers links with LLDP, polls port stats, serves stats and topology over REST |
-| Collector | `services/collector` | asyncio, httpx2, psycopg 3 | Polls the controller, validates samples, writes them idempotently with retry and backoff |
+| Collector | `services/collector` | asyncio, httpx2, psycopg 3 | Polls the controller, validates samples, writes them idempotently with retry and backoff, scores every port against its EWMA baseline and persists alerts |
 | API | `services/api` | FastAPI, httpx2, psycopg 3, uvicorn | `/health`, port statistics, KPIs, topology and service info under `/api/v1`, `/ws/telemetry` WebSocket |
 | Web | `web` | Bun, Vite, React 19, TypeScript, Vitest, Biome | Live dashboard: KPI summary cards, topology graph, per-port throughput charts, reconnecting WebSocket client |
 | Database | `db/migrations` | TimescaleDB 2.30 on PostgreSQL 18, dbmate | Hypertable, continuous aggregate and policies as versioned SQL |
@@ -91,7 +91,8 @@ WEB_PORT=3100 API_PORT=8101 CONTROLLER_REST_PORT=8180 docker compose up --build
 | `WEB_PORT`, `API_PORT`, `CONTROLLER_REST_PORT` | `3000`, `8000`, `8080` | Published host ports for the dashboard, API and controller REST |
 | `COLLECTOR_POLL_INTERVAL_SECONDS` | `5` | Collector poll period; Compose reuses it as `NETPULSE_API_LIVE_INTERVAL_SECONDS` for the WebSocket |
 | `COLLECTOR_REPOSITORY` | `timescale` | `log` only logs each cycle without a database |
-| `NETPULSE_API_LINK_CAPACITY_BPS` | `10000000` | Link capacity used for utilization; unset makes utilization `null` |
+| `COLLECTOR_ALERT_WEBHOOK_URL` | unset | When set, the collector POSTs every alert event to this URL as JSON; unset only logs them |
+| `NETPULSE_API_LINK_CAPACITY_BPS` | `10000000` | Link capacity used for utilization by the API and the collector; unset makes utilization `null` |
 | `NETWORK_LINK_BANDWIDTH_MBPS` | `10` | `TCLink` bandwidth of every emulated link; keep it equal to the API capacity |
 | `NETWORK_TRAFFIC_ENABLED` | `true` | `false` leaves the network idle after the initial `pingAll` |
 | `NETWORK_OVS_DATAPATH` | `user` | `kernel` on a Linux host with the `openvswitch` module loaded, for better throughput |
