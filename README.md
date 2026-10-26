@@ -91,7 +91,7 @@ WEB_PORT=3100 API_PORT=8101 CONTROLLER_REST_PORT=8180 docker compose up --build
 | `WEB_PORT`, `API_PORT`, `CONTROLLER_REST_PORT` | `3000`, `8000`, `8080` | Published host ports for the dashboard, API and controller REST |
 | `COLLECTOR_POLL_INTERVAL_SECONDS` | `5` | Collector poll period; Compose reuses it as `NETPULSE_API_LIVE_INTERVAL_SECONDS` for the WebSocket |
 | `COLLECTOR_REPOSITORY` | `timescale` | `log` only logs each cycle without a database |
-| `COLLECTOR_ALERT_WEBHOOK_URL` | unset | When set, the collector POSTs every alert event to this URL as JSON; unset only logs them |
+| `COLLECTOR_ALERT_WEBHOOK_URL` | unset | When set, the collector POSTs every alert event to this URL as JSON and keeps the URL out of its logs; unset only logs them |
 | `NETPULSE_API_LINK_CAPACITY_BPS` | `10000000` | Link capacity used for utilization by the API and the collector; unset makes utilization `null` |
 | `NETWORK_LINK_BANDWIDTH_MBPS` | `10` | `TCLink` bandwidth of every emulated link; keep it equal to the API capacity |
 | `NETWORK_TRAFFIC_ENABLED` | `true` | `false` leaves the network idle after the initial `pingAll` |
@@ -154,7 +154,7 @@ All REST routes live under `/api/v1`; interactive docs are at `/docs`. Invalid p
 
 Every KPI point carries `dpid`, `port_no`, `computed_at`, `interval_seconds`, `rx_bps`, `tx_bps`, `rx_pps`, `tx_pps`, `drop_rate`, `error_rate`, `utilization` and `counter_reset`; rates are `null` when they cannot be computed.
 
-Every alert carries `id`, `dpid`, `port_no`, `metric` (`rx_bps`, `tx_bps`, `drop_rate` or `error_rate`), `severity` (`warning` or `critical`), `status` (`open` or `resolved`), `opened_at`, `last_seen_at`, `resolved_at`, `acknowledged_at`, `value`, `expected`, `zscore` and `updated_at`; acknowledging is a user mark and does not resolve the alert.
+Every alert carries `id`, `dpid`, `port_no`, `metric` (`rx_bps`, `tx_bps`, `drop_rate` or `error_rate`), `severity` (`warning` or `critical`), `status` (`open` or `resolved`), `opened_at`, `last_seen_at`, `resolved_at`, `acknowledged_at`, `value`, `expected`, `zscore` and `updated_at`; acknowledging is a user mark and does not resolve the alert. Open alerts survive collector restarts: the collector reloads them at startup, a still-active anomaly keeps refreshing the same row, and a vanished one is resolved after the policy window.
 
 ### Port statistics example
 

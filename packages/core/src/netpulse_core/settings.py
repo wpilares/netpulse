@@ -1,9 +1,16 @@
-from typing import Literal
+import logging
+from typing import Final, Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+
+HTTP_CLIENT_LOGGER: Final = "httpx2"
+
+
+def quiet_http_client_logging() -> None:
+    logging.getLogger(HTTP_CLIENT_LOGGER).setLevel(logging.WARNING)
 
 
 class ServiceSettings(BaseSettings):

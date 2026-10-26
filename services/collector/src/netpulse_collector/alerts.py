@@ -2,7 +2,7 @@ import logging
 from collections.abc import Sequence
 from typing import Protocol
 
-from netpulse_core import AlertEvent
+from netpulse_core import AlertEvent, AlertState
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +11,13 @@ class AlertWriteError(Exception):
     pass
 
 
+class AlertReadError(Exception):
+    pass
+
+
 class AlertRepository(Protocol):
+    async def load_open(self) -> tuple[AlertState, ...]: ...
+
     async def apply(self, events: Sequence[AlertEvent]) -> None: ...
 
 
@@ -29,6 +35,9 @@ def describe_event(event: AlertEvent) -> str:
 
 
 class LoggingAlertRepository:
+    async def load_open(self) -> tuple[AlertState, ...]:
+        return ()
+
     async def apply(self, events: Sequence[AlertEvent]) -> None:
         logger.info("skipping persistence of %d alert events", len(events))
 

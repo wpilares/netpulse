@@ -1,3 +1,4 @@
+import logging
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
@@ -11,7 +12,6 @@ from psycopg.conninfo import make_conninfo
 from psycopg.rows import TupleRow
 from psycopg_pool import AsyncConnectionPool
 
-from netpulse_collector.alerts import AlertWriteError
 from netpulse_collector.timescale_alerts import TimescaleAlertRepository
 from netpulse_core import AlertEvent, AlertEventKind, AlertKey, AlertState, Severity
 
@@ -166,11 +166,69 @@ async def test_resolved_alert_leaves_room_for_a_new_open_one(pool: ConnectionPoo
     assert [(row[0], row[2]) for row in rows] == [("resolved", T0), ("open", reopened_at)]
 
 
-async def test_second_open_alert_for_the_same_key_is_rejected(pool: ConnectionPool) -> None:
+async def test_second_open_alert_for_the_same_key_merges_into_the_open_row(
+    pool: ConnectionPool,
+) -> None:
     repository = TimescaleAlertRepository(pool)
+    reopened_at = T0 + timedelta(seconds=30)
     await repository.apply([_event("opened")])
 
-    with pytest.raises(AlertWriteError, match="alerts_open_key_idx"):
-        await repository.apply([_event("opened")])
+    await repository.apply(
+        [
+            AlertEvent(
+                kind="opened",
+                state=_event(
+                    "opened", severity="critical", last_seen_at=reopened_at, value=0.5, zscore=90.0
+                ).state.model_copy(update={"opened_at": reopened_at}),
+            )
+        ]
+    )
 
-    assert len(await _rows(pool)) == 1
+    assert await _rows(pool) == [("open", "critical", T0, reopened_at, None, 0.5, 0.0, 90.0)]
+
+
+async def test_load_open_returns_only_open_alert_states(pool: ConnectionPool) -> None:
+    repository = TimescaleAlertRepository(pool)
+    resolved_at = T0 + timedelta(seconds=70)
+    other_key: AlertKey = (7, 3, "rx_bps")
+    await repository.apply([_event("opened"), _event("resolved", resolved_at=resolved_at)])
+    await repository.apply(
+        [
+            AlertEvent(
+                kind="opened",
+                state=_event(
+                    "opened", severity="critical", value=8_000.0, zscore=6.5
+                ).state.model_copy(update={"key": other_key}),
+            )
+        ]
+    )
+
+    states = await repository.load_open()
+
+    assert states == (
+        AlertState(
+            key=other_key,
+            severity="critical",
+            opened_at=T0,
+            last_seen_at=T0,
+            value=8_000.0,
+            expected=0.0,
+            zscore=6.5,
+            status="open",
+            resolved_at=None,
+        ),
+    )
+
+
+async def test_update_for_an_unknown_open_alert_is_logged(
+    pool: ConnectionPool, caplog: pytest.LogCaptureFixture
+) -> None:
+    repository = TimescaleAlertRepository(pool)
+    resolved_at = T0 + timedelta(seconds=70)
+
+    with caplog.at_level(logging.WARNING, logger="netpulse_collector.timescale_alerts"):
+        await repository.apply([_event("resolved", resolved_at=resolved_at)])
+
+    assert await _rows(pool) == []
+    assert "resolved" in caplog.text
+    assert f"dpid={DPID} port={KEY[1]} metric={KEY[2]}" in caplog.text

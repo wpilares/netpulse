@@ -12,6 +12,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from netpulse_collector.alerts import (
     AlertNotifier,
+    AlertReadError,
     AlertRepository,
     LoggingAlertNotifier,
     LoggingAlertRepository,
@@ -25,6 +26,9 @@ from netpulse_collector.settings import CollectorSettings
 from netpulse_collector.timescale_alerts import TimescaleAlertRepository
 from netpulse_collector.timescale_repository import TimescalePortStatsRepository
 from netpulse_collector.webhook import WebhookAlertNotifier
+from netpulse_core.settings import quiet_http_client_logging
+
+logger = logging.getLogger(__name__)
 
 POOL_CONNECTION_TIMEOUT_SECONDS = 5.0
 
@@ -71,7 +75,7 @@ async def open_notifier(settings: CollectorSettings) -> AsyncIterator[AlertNotif
         yield WebhookAlertNotifier(http, str(settings.alert_webhook_url))
 
 
-def build_observer(
+async def build_observer(
     settings: CollectorSettings, repositories: Repositories, notifier: AlertNotifier
 ) -> PortStatsObserver | None:
     if not settings.detection_enabled:
@@ -81,7 +85,18 @@ def build_observer(
         policy=settings.alert_policy(),
         link_capacity_bps=settings.link_capacity_bps,
     )
+    await seed_open_alerts(detector, repositories.alerts)
     return DetectionObserver(detector, repositories.alerts, notifier)
+
+
+async def seed_open_alerts(detector: AnomalyDetector, repository: AlertRepository) -> None:
+    try:
+        states = await repository.load_open()
+    except AlertReadError:
+        logger.exception("loading open alerts failed; starting without alert state")
+        return
+    detector.seed(states)
+    logger.info("seeded detector with %d open alerts", len(states))
 
 
 async def serve(settings: CollectorSettings) -> None:
@@ -103,7 +118,7 @@ async def serve(settings: CollectorSettings) -> None:
             repositories.port_stats,
             interval_seconds=settings.poll_interval_seconds,
             stop=stop,
-            observer=build_observer(settings, repositories, notifier),
+            observer=await build_observer(settings, repositories, notifier),
         )
 
 
@@ -112,7 +127,7 @@ def main() -> None:
     logging.basicConfig(
         level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s %(message)s"
     )
-    logging.getLogger("httpx2").setLevel(logging.WARNING)
+    quiet_http_client_logging()
     asyncio.run(serve(settings))
 
 
