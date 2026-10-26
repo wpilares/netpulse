@@ -9,14 +9,17 @@ from netpulse_core.kpi import (
 )
 from netpulse_core.settings import LogLevel, ServiceSettings
 from netpulse_core.telemetry import (
+    RESERVED_PORT_START,
     DatapathId,
     PortNumber,
     PortStats,
     PortStatsReport,
     SwitchPortStats,
+    is_reserved_port,
 )
 
 __all__ = [
+    "RESERVED_PORT_START",
     "DatapathId",
     "LogLevel",
     "NetworkSummary",
@@ -29,6 +32,7 @@ __all__ = [
     "ServiceSettings",
     "SwitchPortStats",
     "compute_port_kpis",
+    "is_reserved_port",
     "port_samples",
     "summarize_kpis",
 ]

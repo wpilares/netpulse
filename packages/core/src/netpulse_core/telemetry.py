@@ -1,10 +1,16 @@
-from typing import Annotated
+from typing import Annotated, Final
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 DatapathId = Annotated[int, Field(ge=0, le=2**64 - 1)]
 PortNumber = Annotated[int, Field(ge=0, le=2**32 - 1)]
 Counter = Annotated[int, Field(ge=0)]
+
+RESERVED_PORT_START: Final = 0xFFFFFF00
+
+
+def is_reserved_port(port_no: int) -> bool:
+    return port_no >= RESERVED_PORT_START
 
 
 class TelemetryModel(BaseModel):

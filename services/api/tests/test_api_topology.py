@@ -17,6 +17,7 @@ from netpulse_api.topology import (
     TopologyUnavailableError,
     build_topology,
 )
+from netpulse_core import RESERVED_PORT_START
 
 GENERATED_AT = datetime(2026, 10, 26, 9, 0, tzinfo=UTC)
 LOCAL_PORT = 0xFFFFFFFE
@@ -96,7 +97,9 @@ def test_one_directed_link_is_enough_and_the_lower_dpid_is_the_source() -> None:
 
 
 def test_reserved_ports_never_become_hosts() -> None:
-    controller = ControllerTopology(switches=(_switch(1, 1, 0xFFFFFF00, LOCAL_PORT),), links=())
+    controller = ControllerTopology(
+        switches=(_switch(1, 1, RESERVED_PORT_START, LOCAL_PORT),), links=()
+    )
 
     topology = build_topology(controller, generated_at=GENERATED_AT)
 

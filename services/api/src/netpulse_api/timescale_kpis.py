@@ -10,7 +10,13 @@ from psycopg.rows import TupleRow, dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from netpulse_api.kpis import KpiRange, KpiUnavailableError, SamplePair
-from netpulse_core import DatapathId, PortKpis, PortSample, compute_port_kpis
+from netpulse_core import (
+    RESERVED_PORT_START,
+    DatapathId,
+    PortKpis,
+    PortSample,
+    compute_port_kpis,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,19 +47,18 @@ LATEST_QUERY: Final = sql.SQL("""
     WHERE recency <= 2
     ORDER BY dpid, port_no, time
 """)
+LATEST_PHYSICAL_PORT_CONDITION: Final = sql.SQL("port_no < %(reserved_port_start)s")
 LATEST_SWITCH_CONDITION: Final = sql.SQL("dpid = %(dpid)s::numeric")
 LATEST_LOOKBACK_CONDITION: Final = sql.SQL("time >= %(since)s")
 
 
 def latest_samples_query(*, by_switch: bool, with_lookback: bool) -> sql.Composed:
-    conditions: list[sql.SQL] = []
+    conditions: list[sql.SQL] = [LATEST_PHYSICAL_PORT_CONDITION]
     if by_switch:
         conditions.append(LATEST_SWITCH_CONDITION)
     if with_lookback:
         conditions.append(LATEST_LOOKBACK_CONDITION)
-    where = (
-        sql.SQL("WHERE {}").format(sql.SQL(" AND ").join(conditions)) if conditions else sql.SQL("")
-    )
+    where = sql.SQL("WHERE {}").format(sql.SQL(" AND ").join(conditions))
     return LATEST_QUERY.format(where=where)
 
 
@@ -114,7 +119,10 @@ class TimescaleLatestSamplesQuery:
         query = latest_samples_query(
             by_switch=dpid is not None, with_lookback=self._lookback is not None
         )
-        parameters: dict[str, object] = {"dpid": dpid}
+        parameters: dict[str, object] = {
+            "dpid": dpid,
+            "reserved_port_start": RESERVED_PORT_START,
+        }
         if self._lookback is not None:
             parameters["since"] = datetime.now(UTC) - self._lookback
         samples = await _fetch_samples(self._pool, query, parameters)

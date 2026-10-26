@@ -1,11 +1,9 @@
 from datetime import datetime
-from typing import Final, Literal, Protocol
+from typing import Literal, Protocol
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
-from netpulse_core import DatapathId, PortNumber
-
-RESERVED_PORT_START: Final = 0xFFFFFF00
+from netpulse_core import DatapathId, PortNumber, is_reserved_port
 
 NodeKind = Literal["switch", "host"]
 
@@ -133,7 +131,7 @@ def build_topology(controller: ControllerTopology, *, generated_at: datetime) ->
     ]
     for switch in switches:
         for port in sorted(switch.ports, key=lambda port: port.port_no):
-            if port.port_no >= RESERVED_PORT_START or (switch.dpid, port.port_no) in linked:
+            if is_reserved_port(port.port_no) or (switch.dpid, port.port_no) in linked:
                 continue
             host_id = host_node_id(switch.dpid, port.port_no)
             nodes.append(
