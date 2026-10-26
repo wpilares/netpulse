@@ -1,3 +1,16 @@
+from netpulse_core.anomaly import (
+    METRICS,
+    AnomalySignal,
+    Baseline,
+    BaselineKey,
+    Baselines,
+    DetectionConfig,
+    Metric,
+    Severity,
+    detect_port_anomalies,
+    score_metric,
+    update_baseline,
+)
 from netpulse_core.kpi import (
     NetworkSummary,
     PortCounters,
@@ -19,9 +32,16 @@ from netpulse_core.telemetry import (
 )
 
 __all__ = [
+    "METRICS",
     "RESERVED_PORT_START",
+    "AnomalySignal",
+    "Baseline",
+    "BaselineKey",
+    "Baselines",
     "DatapathId",
+    "DetectionConfig",
     "LogLevel",
+    "Metric",
     "NetworkSummary",
     "PortCounters",
     "PortKpis",
@@ -30,9 +50,13 @@ __all__ = [
     "PortStats",
     "PortStatsReport",
     "ServiceSettings",
+    "Severity",
     "SwitchPortStats",
     "compute_port_kpis",
+    "detect_port_anomalies",
     "is_reserved_port",
     "port_samples",
+    "score_metric",
     "summarize_kpis",
+    "update_baseline",
 ]
