@@ -1,4 +1,5 @@
 import threading
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import datetime
 
@@ -39,7 +40,22 @@ class PortDescription:
         return dict(asdict(self))
 
 
+@dataclass(frozen=True, slots=True)
+class HostDescription:
+    mac: str
+    ipv4: tuple[str, ...]
+    dpid: int
+    port_no: int
+
+    def as_dict(self) -> dict[str, Json]:
+        return {"mac": self.mac, "ipv4": list(self.ipv4)}
+
+
 type Link = tuple[int, int, int, int]
+
+
+def _sorted_hosts(hosts: Iterable[HostDescription]) -> tuple[HostDescription, ...]:
+    return tuple(sorted(hosts, key=lambda host: (host.port_no, host.mac)))
 
 
 class StatsStore:
@@ -47,6 +63,7 @@ class StatsStore:
         self._samples: dict[int, SwitchSample | None] = {}
         self._ports: dict[int, dict[int, PortDescription]] = {}
         self._links: set[Link] = set()
+        self._hosts: dict[str, HostDescription] = {}
         self._lock = threading.Lock()
 
     def register(self, dpid: int) -> None:
@@ -58,6 +75,7 @@ class StatsStore:
             self._samples.pop(dpid, None)
             self._ports.pop(dpid, None)
             self._links = {link for link in self._links if dpid not in (link[0], link[2])}
+            self._hosts = {mac: host for mac, host in self._hosts.items() if host.dpid != dpid}
 
     def record_ports(self, dpid: int, ports: tuple[PortDescription, ...]) -> None:
         with self._lock:
@@ -72,10 +90,27 @@ class StatsStore:
     def remove_port(self, dpid: int, port_no: int) -> None:
         with self._lock:
             self._ports.get(dpid, {}).pop(port_no, None)
+            self._hosts = {
+                mac: host
+                for mac, host in self._hosts.items()
+                if (host.dpid, host.port_no) != (dpid, port_no)
+            }
 
     def ports(self, dpid: int) -> tuple[PortDescription, ...]:
         with self._lock:
             return tuple(sorted(self._ports.get(dpid, {}).values(), key=lambda p: p.port_no))
+
+    def record_host(self, host: HostDescription) -> None:
+        with self._lock:
+            self._hosts[host.mac] = host
+
+    def remove_host(self, mac: str) -> None:
+        with self._lock:
+            self._hosts.pop(mac, None)
+
+    def hosts(self, dpid: int) -> tuple[HostDescription, ...]:
+        with self._lock:
+            return _sorted_hosts(host for host in self._hosts.values() if host.dpid == dpid)
 
     def record_link(self, src_dpid: int, src_port: int, dst_dpid: int, dst_port: int) -> None:
         with self._lock:
@@ -121,8 +156,23 @@ class StatsStore:
                 for dpid in dpids
             }
             links = sorted(self._links)
+            hosts = _sorted_hosts(self._hosts.values())
         switches: list[Json] = [
-            {"dpid": dpid, "ports": [port.as_dict() for port in ports[dpid]]} for dpid in dpids
+            {
+                "dpid": dpid,
+                "ports": [
+                    {
+                        **port.as_dict(),
+                        "hosts": [
+                            host.as_dict()
+                            for host in hosts
+                            if (host.dpid, host.port_no) == (dpid, port.port_no)
+                        ],
+                    }
+                    for port in ports[dpid]
+                ],
+            }
+            for dpid in dpids
         ]
         return {
             "switches": switches,

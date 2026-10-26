@@ -12,12 +12,20 @@ class TopologyUnavailableError(Exception):
     pass
 
 
+class ControllerHost(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    mac: str
+    ipv4: tuple[str, ...] = ()
+
+
 class ControllerPort(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     port_no: PortNumber
     name: str
     hw_addr: str
+    hosts: tuple[ControllerHost, ...] = ()
 
 
 class ControllerSwitch(BaseModel):
@@ -60,6 +68,8 @@ class TopologyNode(BaseModel):
     dpid: DatapathId | None
     port_no: PortNumber | None
     label: str
+    address: str | None = None
+    mac: str | None = None
 
 
 class TopologyEdge(BaseModel):
@@ -101,8 +111,29 @@ def _switch_pairs(controller: ControllerTopology, known: set[int]) -> set[Switch
     return pairs
 
 
-def _host_label(switch: ControllerSwitch, port: ControllerPort) -> str:
-    return port.name or f"h{switch.dpid}:{port.port_no}"
+def _primary_host(port: ControllerPort) -> ControllerHost | None:
+    addressed = (host for host in port.hosts if host.ipv4)
+    return next(addressed, port.hosts[0] if port.hosts else None)
+
+
+def _host_label(switch: ControllerSwitch, port: ControllerPort, host: ControllerHost | None) -> str:
+    if host is None or not host.ipv4:
+        return port.name or f"h{switch.dpid}:{port.port_no}"
+    others = len(port.hosts) - 1
+    return host.ipv4[0] if others == 0 else f"{host.ipv4[0]} +{others}"
+
+
+def _host_node(switch: ControllerSwitch, port: ControllerPort) -> TopologyNode:
+    host = _primary_host(port)
+    return TopologyNode(
+        id=host_node_id(switch.dpid, port.port_no),
+        kind="host",
+        dpid=switch.dpid,
+        port_no=port.port_no,
+        label=_host_label(switch, port, host),
+        address=host.ipv4[0] if host is not None and host.ipv4 else None,
+        mac=None if host is None else host.mac,
+    )
 
 
 def build_topology(controller: ControllerTopology, *, generated_at: datetime) -> Topology:
@@ -133,20 +164,12 @@ def build_topology(controller: ControllerTopology, *, generated_at: datetime) ->
         for port in sorted(switch.ports, key=lambda port: port.port_no):
             if is_reserved_port(port.port_no) or (switch.dpid, port.port_no) in linked:
                 continue
-            host_id = host_node_id(switch.dpid, port.port_no)
-            nodes.append(
-                TopologyNode(
-                    id=host_id,
-                    kind="host",
-                    dpid=switch.dpid,
-                    port_no=port.port_no,
-                    label=_host_label(switch, port),
-                )
-            )
+            host = _host_node(switch, port)
+            nodes.append(host)
             edges.append(
                 TopologyEdge(
                     source=switch_node_id(switch.dpid),
-                    target=host_id,
+                    target=host.id,
                     source_port=port.port_no,
                     target_port=None,
                 )

@@ -28,7 +28,7 @@ def build_network(spec: TopologySpec, config: NetworkConfig) -> Mininet:
         switch=OVSSwitch,
         link=TCLink,
         autoSetMacs=True,
-        autoStaticArp=True,
+        autoStaticArp=False,
         build=False,
     )
     network.addController(

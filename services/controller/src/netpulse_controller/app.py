@@ -12,18 +12,49 @@ from os_ken.controller.handler import (
     set_ev_cls,
 )
 from os_ken.lib import hub
+from os_ken.lib.packet import ether_types
 from os_ken.ofproto import ofproto_v1_3
 from os_ken.topology import event as topology_event
 from os_ken.topology import switches as topology_switches
 
 from netpulse_controller.rest import create_rest_server
 from netpulse_controller.settings import ControllerSettings
-from netpulse_controller.stats_store import PortCounters, PortDescription, StatsStore
+from netpulse_controller.stats_store import (
+    HostDescription,
+    PortCounters,
+    PortDescription,
+    StatsStore,
+)
+
+ARP_PUNT_PRIORITY = 1
+ARP_PUNT_MAX_LEN = 128
 
 
 def _describe_port(port: topology_switches.Port) -> PortDescription:
     name = port.name.decode("utf-8", "replace") if isinstance(port.name, bytes) else str(port.name)
     return PortDescription(port_no=int(port.port_no), name=name, hw_addr=str(port.hw_addr))
+
+
+def _describe_host(host: topology_switches.Host) -> HostDescription:
+    return HostDescription(
+        mac=str(host.mac),
+        ipv4=tuple(str(address) for address in host.ipv4),
+        dpid=int(host.port.dpid),
+        port_no=int(host.port.port_no),
+    )
+
+
+def _install_flow(
+    datapath: Datapath, *, priority: int, match: object, actions: list[object]
+) -> None:
+    ofproto = datapath.ofproto
+    parser = datapath.ofproto_parser
+    instructions = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+    datapath.send_msg(
+        parser.OFPFlowMod(
+            datapath=datapath, priority=priority, match=match, instructions=instructions
+        )
+    )
 
 
 class NetPulseMonitor(app_manager.OSKenApp):
@@ -48,15 +79,20 @@ class NetPulseMonitor(app_manager.OSKenApp):
         datapath = event.msg.datapath
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
-        actions = [parser.OFPActionOutput(ofproto.OFPP_NORMAL)]
-        instructions = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-        datapath.send_msg(
-            parser.OFPFlowMod(
-                datapath=datapath,
-                priority=0,
-                match=parser.OFPMatch(),
-                instructions=instructions,
-            )
+        _install_flow(
+            datapath,
+            priority=0,
+            match=parser.OFPMatch(),
+            actions=[parser.OFPActionOutput(ofproto.OFPP_NORMAL)],
+        )
+        _install_flow(
+            datapath,
+            priority=ARP_PUNT_PRIORITY,
+            match=parser.OFPMatch(eth_type=ether_types.ETH_TYPE_ARP),
+            actions=[
+                parser.OFPActionOutput(ofproto.OFPP_NORMAL),
+                parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ARP_PUNT_MAX_LEN),
+            ],
         )
 
     @set_ev_cls(ofp_event.EventOFPStateChange, [MAIN_DISPATCHER, DEAD_DISPATCHER])
@@ -111,6 +147,21 @@ class NetPulseMonitor(app_manager.OSKenApp):
     @set_ev_cls(topology_event.EventPortDelete)
     def forget_port(self, event: topology_event.EventPortDelete) -> None:
         self._store.remove_port(event.port.dpid, event.port.port_no)
+
+    @set_ev_cls(topology_event.EventHostAdd)
+    def record_host(self, event: topology_event.EventHostAdd) -> None:
+        host = _describe_host(event.host)
+        self._store.record_host(host)
+        self.logger.info("host %s %s on %s:%s", host.mac, host.ipv4, host.dpid, host.port_no)
+
+    @set_ev_cls(topology_event.EventHostMove)
+    def move_host(self, event: topology_event.EventHostMove) -> None:
+        self._store.remove_host(str(event.src.mac))
+        self._store.record_host(_describe_host(event.dst))
+
+    @set_ev_cls(topology_event.EventHostDelete)
+    def forget_host(self, event: topology_event.EventHostDelete) -> None:
+        self._store.remove_host(str(event.host.mac))
 
     @set_ev_cls(topology_event.EventLinkAdd)
     def record_link(self, event: topology_event.EventLinkAdd) -> None:
