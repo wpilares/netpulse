@@ -2,6 +2,7 @@ import socket
 import threading
 import time
 from collections.abc import Iterator
+from typing import Literal
 
 from mininet.link import TCIntf, TCLink
 from mininet.log import info, setLogLevel
@@ -128,19 +129,32 @@ def _set_link_loss(network: Mininet, spec: TopologySpec, link: Link, loss_percen
     info("\n")
 
 
+def _set_host_interface(network: Mininet, host: str, status: Literal["up", "down"]) -> None:
+    network.get(host).intf().ifconfig(status)
+
+
+def _switch_port_facing(network: Mininet, host: str) -> str:
+    host_interface = network.get(host).intf()
+    link = host_interface.link
+    peer = link.intf2 if link.intf1 is host_interface else link.intf1
+    return str(peer.name)
+
+
 def _apply_fault(network: Mininet, spec: TopologySpec, fault: Fault) -> None:
     if fault.kind == "loss":
         _set_link_loss(network, spec, fault.link, fault.loss_percent)
-    else:
-        network.configLinkStatus(fault.link.source, fault.link.target, "down")
-    info(f"*** Fault: {describe_fault(fault)}\n")
+        info(f"*** Fault: {describe_fault(fault)}\n")
+    elif fault.host is not None:
+        _set_host_interface(network, fault.host, "down")
+        port = _switch_port_facing(network, fault.host)
+        info(f"*** Fault: {describe_fault(fault)} ({port} counts the drops)\n")
 
 
 def _clear_fault(network: Mininet, spec: TopologySpec, fault: Fault) -> None:
     if fault.kind == "loss":
         _set_link_loss(network, spec, fault.link, 0)
-    else:
-        network.configLinkStatus(fault.link.source, fault.link.target, "up")
+    elif fault.host is not None:
+        _set_host_interface(network, fault.host, "up")
     info("*** Fault cleared\n")
 
 

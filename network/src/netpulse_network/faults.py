@@ -4,10 +4,10 @@ from typing import Literal, Self
 
 from netpulse_network.topology import Link
 
-FaultKind = Literal["loss", "link_down"]
+FaultKind = Literal["loss", "host_down"]
 ScheduledEvent = Literal["traffic", "fault_start", "fault_end"]
 
-DEFAULT_KINDS: tuple[FaultKind, ...] = ("loss", "link_down")
+DEFAULT_KINDS: tuple[FaultKind, ...] = ("loss", "host_down")
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,6 +16,15 @@ class Fault:
     link: Link
     duration_seconds: int
     loss_percent: int
+    host: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.kind == "host_down") != (self.host is not None):
+            raise ValueError(f"host must be set exactly when kind is host_down: {self}")
+
+    @property
+    def switch(self) -> str:
+        return self.link.source if self.link.target == self.host else self.link.target
 
 
 _LCG_MULTIPLIER = 1103515245
@@ -37,16 +46,49 @@ class _Shuffler:
             items[index], items[other] = items[other], items[index]
 
 
-def _touches_host(link: Link, hosts: Collection[str]) -> bool:
-    return link.source in hosts or link.target in hosts
+def _link_host(link: Link, hosts: Collection[str]) -> str | None:
+    if link.target in hosts:
+        return link.target
+    if link.source in hosts:
+        return link.source
+    return None
 
 
-def _link_cycle(links: Sequence[Link], hosts: Collection[str], shuffler: _Shuffler) -> list[Link]:
-    host_links = [link for link in links if _touches_host(link, hosts)]
-    switch_links = [link for link in links if not _touches_host(link, hosts)]
+def _link_cycle(
+    links: Sequence[Link],
+    hosts: Collection[str],
+    kinds: Sequence[FaultKind],
+    shuffler: _Shuffler,
+) -> list[Link]:
+    host_links = [link for link in links if _link_host(link, hosts) is not None]
+    switch_links = [link for link in links if _link_host(link, hosts) is None]
     shuffler.shuffle(host_links)
     shuffler.shuffle(switch_links)
+    if "loss" not in kinds:
+        return host_links
     return [*host_links, *switch_links]
+
+
+def _fault_on(
+    link: Link,
+    hosts: Collection[str],
+    kind: FaultKind,
+    *,
+    duration_seconds: int,
+    loss_percent: int,
+) -> Fault:
+    host = _link_host(link, hosts)
+    if host is None or kind == "loss":
+        return Fault(
+            kind="loss", link=link, duration_seconds=duration_seconds, loss_percent=loss_percent
+        )
+    return Fault(
+        kind="host_down",
+        link=link,
+        duration_seconds=duration_seconds,
+        loss_percent=loss_percent,
+        host=host,
+    )
 
 
 def plan_faults(
@@ -69,16 +111,19 @@ def plan_faults(
         raise ValueError("duration_seconds must be positive")
     if not 1 <= loss_percent <= 100:
         raise ValueError("loss_percent must be between 1 and 100")
+    if "loss" not in kinds and all(_link_host(link, hosts) is None for link in links):
+        raise ValueError("host_down faults need at least one link that touches a host")
     shuffler = _Shuffler(seed)
     planned: list[Fault] = []
     cycle: list[Link] = []
     for index in range(count):
         if not cycle:
-            cycle = _link_cycle(links, hosts, shuffler)
+            cycle = _link_cycle(links, hosts, kinds, shuffler)
         planned.append(
-            Fault(
-                kind=kinds[index % len(kinds)],
-                link=cycle.pop(0),
+            _fault_on(
+                cycle.pop(0),
+                hosts,
+                kinds[index % len(kinds)],
                 duration_seconds=duration_seconds,
                 loss_percent=loss_percent,
             )
@@ -87,10 +132,10 @@ def plan_faults(
 
 
 def describe_fault(fault: Fault) -> str:
-    link = f"{fault.link.source} <-> {fault.link.target}"
     if fault.kind == "loss":
+        link = f"{fault.link.source} <-> {fault.link.target}"
         return f"loss {fault.loss_percent}% on {link} for {fault.duration_seconds}s"
-    return f"link down {link} for {fault.duration_seconds}s"
+    return f"host down {fault.host} behind {fault.switch} for {fault.duration_seconds}s"
 
 
 @dataclass(frozen=True, slots=True)
