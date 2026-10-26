@@ -12,6 +12,7 @@ class TopologySpec:
     switches: tuple[str, ...]
     hosts: tuple[str, ...]
     links: tuple[Link, ...]
+    link_bandwidth_mbps: int = 10
 
     def datapath_id(self, switch: str) -> str:
         return f"{self.switches.index(switch) + 1:016x}"
@@ -41,13 +42,16 @@ class _TreeBuilder:
         self.links.append(Link(parent, host))
 
 
-def build_tree(*, depth: int, fanout: int) -> TopologySpec:
+def build_tree(*, depth: int, fanout: int, link_bandwidth_mbps: int = 10) -> TopologySpec:
     if depth < 1 or fanout < 1:
         raise ValueError("depth and fanout must be positive")
+    if link_bandwidth_mbps < 1:
+        raise ValueError("link bandwidth must be positive")
     builder = _TreeBuilder(fanout=fanout)
     builder.add_switch(None, depth)
     return TopologySpec(
         switches=tuple(builder.switches),
         hosts=tuple(builder.hosts),
         links=tuple(builder.links),
+        link_bandwidth_mbps=link_bandwidth_mbps,
     )

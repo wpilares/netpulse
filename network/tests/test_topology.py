@@ -42,6 +42,20 @@ def test_tree_rejects_non_positive_dimensions(depth: int, fanout: int) -> None:
         build_tree(depth=depth, fanout=fanout)
 
 
+def test_links_default_to_ten_megabits() -> None:
+    assert build_tree(depth=1, fanout=2).link_bandwidth_mbps == 10
+
+
+def test_link_bandwidth_is_carried_by_the_spec() -> None:
+    assert build_tree(depth=1, fanout=2, link_bandwidth_mbps=100).link_bandwidth_mbps == 100
+
+
+@pytest.mark.parametrize("bandwidth", [0, -10])
+def test_tree_rejects_non_positive_bandwidth(bandwidth: int) -> None:
+    with pytest.raises(ValueError, match="bandwidth"):
+        build_tree(depth=1, fanout=2, link_bandwidth_mbps=bandwidth)
+
+
 def test_datapath_ids_are_derived_from_switch_names() -> None:
     spec = build_tree(depth=2, fanout=2)
 
