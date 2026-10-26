@@ -1,4 +1,5 @@
 import { useEffect, useReducer, useRef } from "react";
+import { type Alert, upsertAlerts } from "../alerts/alerts";
 import { type KpiFrame, type LiveFrame, parseLiveFrame } from "./frames";
 import { appendHistory, emptyHistory, type PortHistory } from "./history";
 
@@ -33,6 +34,8 @@ export interface TelemetrySocketState {
   readonly status: SocketStatus;
   readonly latest: KpiFrame | null;
   readonly history: PortHistory;
+  readonly alerts: readonly Alert[];
+  readonly alertsSynced: boolean;
   readonly storeUnavailable: boolean;
   readonly lastHeartbeatAt: string | null;
   readonly attempt: number;
@@ -53,6 +56,8 @@ const initialState: TelemetrySocketState = {
   status: "connecting",
   latest: null,
   history: emptyHistory,
+  alerts: [],
+  alertsSynced: false,
   storeUnavailable: false,
   lastHeartbeatAt: null,
   attempt: 0,
@@ -75,6 +80,8 @@ const applyFrame = (state: TelemetrySocketState, frame: LiveFrame, maxPoints: nu
         history: appendHistory(state.history, frame, maxPoints),
         storeUnavailable: false,
       };
+    case "alerts":
+      return { ...state, alerts: upsertAlerts(state.alerts, frame.alerts), alertsSynced: true };
     case "heartbeat":
       return { ...state, lastHeartbeatAt: frame.at };
     case "store_unavailable":
@@ -93,7 +100,7 @@ const reduce = (state: TelemetrySocketState, action: Action): TelemetrySocketSta
     case "frame":
       return applyFrame(state, action.frame, action.maxPoints);
     case "reconnecting":
-      return { ...state, status: "reconnecting", attempt: action.attempt };
+      return { ...state, status: "reconnecting", attempt: action.attempt, alerts: [], alertsSynced: false };
     case "closed":
       return { ...state, status: "closed" };
   }

@@ -1,6 +1,7 @@
 import { act, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
+import { makeAlert, makeAlertsFrame } from "./features/alerts/fixtures";
 import { createFakeSocket, FakeSocket } from "./features/telemetry/fakeSocket";
 import { makeKpiFrame, makePort, makeSnapshot } from "./features/telemetry/fixtures";
 
@@ -24,6 +25,8 @@ const fakeFetch = vi.fn<typeof fetch>((input) => {
       return Promise.resolve(Response.json(makeSnapshot([makePort({ rx_bps: 1_000_000 })])));
     case "/api/v1/topology":
       return Promise.resolve(Response.json(topology));
+    case "/api/v1/alerts?status=open&limit=100":
+      return Promise.resolve(Response.json({ generated_at: "2026-10-26T10:00:00Z", alerts: [] }));
     default:
       return Promise.resolve(new Response(null, { status: 404 }));
   }
@@ -51,5 +54,20 @@ describe("App", () => {
     expect(screen.getByText("Inbound throughput").nextElementSibling).toHaveTextContent("3.0 Mb/s");
     expect(screen.getByRole("button", { name: "Switch 1", pressed: true })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: /Port 1 throughput/ })).toBeInTheDocument();
+  });
+
+  it("shows live alerts in the header badge and the alerts panel", async () => {
+    render(<App fetcher={fakeFetch} createSocket={createFakeSocket} socketUrl="ws://test/ws/telemetry" />);
+
+    expect(await screen.findByText("No alerts")).toBeInTheDocument();
+    expect(screen.getByText("No open alerts")).toBeInTheDocument();
+
+    act(() => FakeSocket.at(0).open());
+    act(() => FakeSocket.at(0).message(makeAlertsFrame([makeAlert({ id: 1, severity: "critical" })])));
+
+    expect(screen.getByText("1 alert").closest("output")).toHaveAttribute("data-tone", "critical");
+    expect(screen.getByRole("heading", { name: "Alerts" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Acknowledge" })).toBeInTheDocument();
+    expect(screen.queryByText("No open alerts")).not.toBeInTheDocument();
   });
 });

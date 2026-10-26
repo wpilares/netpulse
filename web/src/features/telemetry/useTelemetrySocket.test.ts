@@ -1,5 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeAlert, makeAlertsFrame } from "../alerts/fixtures";
 import { createFakeSocket, FakeSocket } from "./fakeSocket";
 import { makeKpiFrame, makePort } from "./fixtures";
 import { reconnectDelayMs, telemetrySocketUrl, useTelemetrySocket } from "./useTelemetrySocket";
@@ -118,6 +119,37 @@ describe("useTelemetrySocket", () => {
 
     act(() => FakeSocket.at(0).message(makeKpiFrame([makePort()])));
     expect(result.current.storeUnavailable).toBe(false);
+  });
+
+  it("upserts alerts frames and resets them when the socket reconnects", () => {
+    const { result } = renderSocket();
+    act(() => FakeSocket.at(0).open());
+    expect(result.current.alerts).toEqual([]);
+    expect(result.current.alertsSynced).toBe(false);
+
+    act(() =>
+      FakeSocket.at(0).message(
+        makeAlertsFrame([makeAlert({ id: 1 }), makeAlert({ id: 2, opened_at: "2026-10-26T10:01:00Z" })]),
+      ),
+    );
+    expect(result.current.alertsSynced).toBe(true);
+    expect(result.current.alerts.map((alert) => alert.id)).toEqual([2, 1]);
+
+    act(() => FakeSocket.at(0).message(makeAlertsFrame([makeAlert({ id: 1, severity: "critical" })])));
+    expect(result.current.alerts.map((alert) => [alert.id, alert.severity])).toEqual([
+      [2, "warning"],
+      [1, "critical"],
+    ]);
+
+    act(() => FakeSocket.at(0).serverClose());
+    expect(result.current.alerts).toEqual([]);
+    expect(result.current.alertsSynced).toBe(false);
+
+    act(() => vi.advanceTimersByTime(1000));
+    act(() => FakeSocket.at(1).open());
+    act(() => FakeSocket.at(1).message(makeAlertsFrame([makeAlert({ id: 3 })])));
+    expect(result.current.alerts.map((alert) => alert.id)).toEqual([3]);
+    expect(result.current.alertsSynced).toBe(true);
   });
 
   it("pings while open and stops after the socket closes", () => {

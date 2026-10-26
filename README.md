@@ -17,12 +17,13 @@ NetPulse emulates a software-defined network with Mininet, controls it with an O
 
 | Panel | Source | Content |
 | --- | --- | --- |
-| Header badges | `GET /health`, socket state | API and database reachability, API version, live/reconnecting status and last frame time |
+| Header badges | `GET /health`, socket state, `alerts` frames | API and database reachability, API version, live/reconnecting status and last frame time, open alert count (critical when any critical alert is open, warning when any alert is open, positive otherwise) |
 | Network summary | `kpis` frames | Inbound and outbound throughput, max utilization, drop rate, error rate, switches, physical ports, counter resets |
+| Alerts | `GET /api/v1/alerts`, `alerts` frames | Open alerts newest first with severity, switch and port, metric, observed and expected values, z-score and opening time; an acknowledge button per alert (`POST /api/v1/alerts/{id}/ack`, applied optimistically and rolled back on failure); a toggle that loads the last 50 resolved alerts on demand |
 | Topology | `GET /api/v1/topology` | Switches and hosts as discovered by LLDP; links recolored on every frame by the busiest direction's utilization (idle, low under 30 %, medium under 70 %, high under 90 %, saturated) |
 | Switch ports | `kpis` frames | Per-port utilization, drop and error rates, packet rates and a receive/transmit throughput chart over the last 120 frames (about ten minutes) |
 
-Charts and the topology graph are hand-rolled SVG with no chart library. The first frame comes from `GET /api/v1/kpis/summary`; after that the client follows the WebSocket, reconnects with exponential backoff (1 s doubling to 30 s plus jitter) and pings every 15 s to keep proxies from idling the socket out. Host labels are the switch port names facing them (`s2-eth2`), because the controller learns ports from LLDP but never sees Mininet host names.
+Charts and the topology graph are hand-rolled SVG with no chart library. The first frame comes from `GET /api/v1/kpis/summary` and the first alert list from `GET /api/v1/alerts`; after that the client follows the WebSocket (the first `alerts` frame after every connect carries all open alerts, later ones only the changed rows, which the client upserts by id), reconnects with exponential backoff (1 s doubling to 30 s plus jitter) and pings every 15 s to keep proxies from idling the socket out. Host labels are the switch port names facing them (`s2-eth2`), because the controller learns ports from LLDP but never sees Mininet host names.
 
 ## Architecture
 
