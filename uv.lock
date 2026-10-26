@@ -422,6 +422,7 @@ version = "0.1.0"
 source = { editable = "services/api" }
 dependencies = [
     { name = "fastapi" },
+    { name = "httpx2" },
     { name = "netpulse-core" },
     { name = "psycopg", extra = ["binary", "pool"] },
     { name = "uvicorn", extra = ["standard"] },
@@ -430,6 +431,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.150.0" },
+    { name = "httpx2", specifier = ">=2.15.1" },
     { name = "netpulse-core", editable = "packages/core" },
     { name = "psycopg", extras = ["binary", "pool"], specifier = ">=3.3.6" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },

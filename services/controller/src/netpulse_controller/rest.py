@@ -34,6 +34,7 @@ def create_rest_app(store: StatsStore) -> WSGIApplication:
         "/health": lambda: {"status": "ok"},
         "/switches": lambda: {"switches": list(store.switches())},
         "/stats/ports": store.port_stats_report,
+        "/topology": store.topology_report,
     }
 
     def application(environ: WSGIEnvironment, start_response: StartResponse) -> Iterable[bytes]:

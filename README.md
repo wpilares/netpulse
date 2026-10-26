@@ -39,9 +39,9 @@ Data flows left to right. The controller requests `OFPPortStatsRequest` from eve
 | --- | --- | --- | --- |
 | Core | `packages/core` | pydantic 2, pydantic-settings | Shared typed telemetry models and settings base |
 | Network | `network` | Mininet, Open vSwitch | Emulated tree topology connected to the remote controller |
-| Controller | `services/controller` | OS-Ken 4 (Python 3.13) | Tracks switches, installs forwarding, polls port stats, serves them over REST |
+| Controller | `services/controller` | OS-Ken 4 (Python 3.13) | Tracks switches, installs forwarding, discovers links with LLDP, polls port stats, serves stats and topology over REST |
 | Collector | `services/collector` | asyncio, httpx2, psycopg 3 | Polls the controller, validates samples, writes them idempotently with retry and backoff |
-| API | `services/api` | FastAPI, psycopg 3, uvicorn | `/health`, port statistics and service info under `/api/v1`, `/ws/telemetry` WebSocket |
+| API | `services/api` | FastAPI, httpx2, psycopg 3, uvicorn | `/health`, port statistics, KPIs, topology and service info under `/api/v1`, `/ws/telemetry` WebSocket |
 | Web | `web` | Bun, Vite, React 19, TypeScript, Vitest, Biome | Dashboard shell with live API health status |
 | Database | `db/migrations` | TimescaleDB 2.30 on PostgreSQL 18, dbmate | Hypertable, continuous aggregate and policies as versioned SQL |
 
@@ -62,6 +62,7 @@ docker compose up --build
 | http://localhost:8000/docs | API OpenAPI docs |
 | http://localhost:8000/health | API health, including database reachability |
 | http://localhost:8080/stats/ports | Raw port statistics from the controller |
+| http://localhost:8080/topology | Switches, ports and discovered links from the controller |
 
 ## Data model
 
@@ -111,6 +112,26 @@ Invalid parameters return `422`; a range with no data returns an empty `points` 
 - `{"type": "store_unavailable", "at": "..."}` when the database cannot be queried.
 
 Clients may send `{"type": "ping"}` and receive `{"type": "pong"}`; any other message gets `{"type": "error", "reason": "unsupported message"}`. Frames queue per client (`NETPULSE_API_LIVE_QUEUE_SIZE`, 16); a client that falls behind is disconnected with close code `1013` and reason `slow consumer`.
+
+### Topology
+
+`GET /api/v1/topology` returns the graph the dashboard draws. The controller runs OS-Ken's `switches` app with link observation on: every switch gets an LLDP-to-controller flow at priority `0xFFFF` above the `NORMAL` forwarding rule, so neighbours discover each other through LLDP, and `GET /topology` on the controller lists switches, their ports and the directed links OS-Ken reports. The API reads that payload over HTTP (`NETPULSE_API_CONTROLLER_URL`, `NETPULSE_API_CONTROLLER_TIMEOUT_SECONDS`, 2 s) and turns it into nodes and edges:
+
+```json
+{
+  "generated_at": "2026-10-26T09:00:00Z",
+  "nodes": [
+    {"id": "s:1", "kind": "switch", "dpid": 1, "port_no": null, "label": "s1"},
+    {"id": "h:2:1", "kind": "host", "dpid": 2, "port_no": 1, "label": "s2-eth1"}
+  ],
+  "edges": [
+    {"source": "s:1", "target": "s:2", "source_port": 1, "target_port": 3},
+    {"source": "s:2", "target": "h:2:1", "source_port": 1, "target_port": null}
+  ]
+}
+```
+
+Each inter-switch link appears once with the lower `dpid` as `source`. A switch port that is neither reserved nor the end of a link is assumed to face a host and becomes a `host` node attached to its switch. `503` means the controller URL is not configured or the controller did not answer.
 
 The `network` container runs Mininet and Open vSwitch, which need Linux network namespaces, so it runs **privileged**. On Linux it uses the host kernel directly. On macOS and Windows it runs inside Docker Desktop's Linux VM. By default Open vSwitch uses its userspace datapath (`NETWORK_OVS_DATAPATH=user`), which needs no kernel module; on a Linux host with the `openvswitch` module loaded you can switch to `kernel` for better throughput.
 
