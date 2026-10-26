@@ -19,6 +19,11 @@ def test_defaults_target_the_compose_controller() -> None:
         traffic_min_mbps=1,
         traffic_max_mbps=8,
         traffic_seed=7,
+        fault_enabled=True,
+        fault_period_seconds=90,
+        fault_duration_seconds=30,
+        fault_loss_percent=20,
+        fault_seed=11,
     )
 
 
@@ -37,6 +42,11 @@ def test_values_are_read_from_environment() -> None:
             "NETPULSE_NETWORK_TRAFFIC_MIN_MBPS": "5",
             "NETPULSE_NETWORK_TRAFFIC_MAX_MBPS": "50",
             "NETPULSE_NETWORK_TRAFFIC_SEED": "42",
+            "NETPULSE_NETWORK_FAULT_ENABLED": "false",
+            "NETPULSE_NETWORK_FAULT_PERIOD_SECONDS": "120",
+            "NETPULSE_NETWORK_FAULT_DURATION_SECONDS": "45",
+            "NETPULSE_NETWORK_FAULT_LOSS_PERCENT": "50",
+            "NETPULSE_NETWORK_FAULT_SEED": "3",
         }
     )
 
@@ -53,6 +63,11 @@ def test_values_are_read_from_environment() -> None:
         traffic_min_mbps=5,
         traffic_max_mbps=50,
         traffic_seed=42,
+        fault_enabled=False,
+        fault_period_seconds=120,
+        fault_duration_seconds=45,
+        fault_loss_percent=50,
+        fault_seed=3,
     )
 
 
@@ -69,6 +84,10 @@ def test_traffic_enabled_accepts_common_boolean_spellings(raw: str, expected: bo
 def test_unknown_boolean_is_rejected() -> None:
     with pytest.raises(ValueError, match="TRAFFIC_ENABLED"):
         NetworkConfig.from_env({"NETPULSE_NETWORK_TRAFFIC_ENABLED": "maybe"})
+
+
+def test_fault_injection_can_be_disabled() -> None:
+    assert NetworkConfig.from_env({"NETPULSE_NETWORK_FAULT_ENABLED": "off"}).fault_enabled is False
 
 
 def test_unknown_datapath_is_rejected() -> None:
@@ -95,5 +114,20 @@ def test_non_numeric_port_is_rejected() -> None:
     ],
 )
 def test_traffic_bounds_are_validated(name: str, value: str, match: str) -> None:
+    with pytest.raises(ValueError, match=match):
+        NetworkConfig.from_env({f"NETPULSE_NETWORK_{name}": value})
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "match"),
+    [
+        ("FAULT_PERIOD_SECONDS", "0", "fault_period_seconds"),
+        ("FAULT_DURATION_SECONDS", "0", "fault_duration_seconds"),
+        ("FAULT_DURATION_SECONDS", "90", "fault_duration_seconds"),
+        ("FAULT_LOSS_PERCENT", "0", "fault_loss_percent"),
+        ("FAULT_LOSS_PERCENT", "101", "fault_loss_percent"),
+    ],
+)
+def test_fault_bounds_are_validated(name: str, value: str, match: str) -> None:
     with pytest.raises(ValueError, match=match):
         NetworkConfig.from_env({f"NETPULSE_NETWORK_{name}": value})

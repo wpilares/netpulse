@@ -53,6 +53,11 @@ def _require_positive(name: str, value: int) -> None:
         raise ValueError(f"{name} must be positive, got {value}")
 
 
+def _require_percent(name: str, value: int) -> None:
+    if not 1 <= value <= 100:
+        raise ValueError(f"{name} must be between 1 and 100, got {value}")
+
+
 @dataclass(frozen=True, slots=True)
 class NetworkConfig:
     controller_host: str
@@ -67,6 +72,11 @@ class NetworkConfig:
     traffic_min_mbps: int = 1
     traffic_max_mbps: int = 8
     traffic_seed: int = 7
+    fault_enabled: bool = True
+    fault_period_seconds: int = 90
+    fault_duration_seconds: int = 30
+    fault_loss_percent: int = 20
+    fault_seed: int = 11
 
     def __post_init__(self) -> None:
         _require_positive("link_bandwidth_mbps", self.link_bandwidth_mbps)
@@ -89,6 +99,14 @@ class NetworkConfig:
                 f"traffic_duration_seconds {self.traffic_duration_seconds} exceeds "
                 f"traffic_round_seconds {self.traffic_round_seconds}"
             )
+        _require_positive("fault_period_seconds", self.fault_period_seconds)
+        _require_positive("fault_duration_seconds", self.fault_duration_seconds)
+        _require_percent("fault_loss_percent", self.fault_loss_percent)
+        if self.fault_duration_seconds >= self.fault_period_seconds:
+            raise ValueError(
+                f"fault_duration_seconds {self.fault_duration_seconds} must be shorter than "
+                f"fault_period_seconds {self.fault_period_seconds}"
+            )
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> Self:
@@ -105,4 +123,9 @@ class NetworkConfig:
             traffic_min_mbps=_integer(environ, "TRAFFIC_MIN_MBPS", 1),
             traffic_max_mbps=_integer(environ, "TRAFFIC_MAX_MBPS", 8),
             traffic_seed=_integer(environ, "TRAFFIC_SEED", 7),
+            fault_enabled=_boolean(environ, "FAULT_ENABLED", True),
+            fault_period_seconds=_integer(environ, "FAULT_PERIOD_SECONDS", 90),
+            fault_duration_seconds=_integer(environ, "FAULT_DURATION_SECONDS", 30),
+            fault_loss_percent=_integer(environ, "FAULT_LOSS_PERCENT", 20),
+            fault_seed=_integer(environ, "FAULT_SEED", 11),
         )
