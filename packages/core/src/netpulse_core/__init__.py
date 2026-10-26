@@ -1,3 +1,13 @@
+from netpulse_core.alerts import (
+    AlertEvent,
+    AlertEventKind,
+    AlertKey,
+    AlertPolicy,
+    AlertState,
+    AlertStates,
+    AlertStatus,
+    evaluate_alerts,
+)
 from netpulse_core.anomaly import (
     METRICS,
     AnomalySignal,
@@ -34,6 +44,13 @@ from netpulse_core.telemetry import (
 __all__ = [
     "METRICS",
     "RESERVED_PORT_START",
+    "AlertEvent",
+    "AlertEventKind",
+    "AlertKey",
+    "AlertPolicy",
+    "AlertState",
+    "AlertStates",
+    "AlertStatus",
     "AnomalySignal",
     "Baseline",
     "BaselineKey",
@@ -54,6 +71,7 @@ __all__ = [
     "SwitchPortStats",
     "compute_port_kpis",
     "detect_port_anomalies",
+    "evaluate_alerts",
     "is_reserved_port",
     "port_samples",
     "score_metric",
