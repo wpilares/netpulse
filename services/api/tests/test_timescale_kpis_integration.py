@@ -208,3 +208,15 @@ async def test_latest_filters_by_switch(pool: ConnectionPool, start: datetime) -
 
     assert [current.stats.port_no for _, current in switch_pairs] == [2, 3]
     assert unknown == []
+
+
+async def test_latest_honours_the_lookback_window(pool: ConnectionPool, start: datetime) -> None:
+    recent = TimescaleLatestSamplesQuery(pool, lookback_seconds=60)
+    wide = TimescaleLatestSamplesQuery(pool, lookback_seconds=3_600)
+
+    assert await recent.fetch(None) == []
+    assert [(current.dpid, current.stats.port_no) for _, current in await wide.fetch(None)] == [
+        (7, 2),
+        (7, 3),
+        (8, 1),
+    ]

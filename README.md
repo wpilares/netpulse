@@ -102,6 +102,16 @@ curl -s "http://localhost:8000/api/v1/switches/1/ports/1/stats?from=2026-10-20T1
 
 Invalid parameters return `422`; a range with no data returns an empty `points` list; `503` means the database is unreachable or not configured.
 
+### Live telemetry
+
+`/ws/telemetry` pushes the same network summary as `/api/v1/kpis/summary` without polling. After the `{"type": "hello", "version": "..."}` greeting the API sends one frame per cycle (`NETPULSE_API_LIVE_INTERVAL_SECONDS`, 5 s by default; Compose ties it to the collector poll interval):
+
+- `{"type": "kpis", "generated_at": "...", "summary": {...}, "switches": [...]}` when at least one port has two samples inside the lookback window (`NETPULSE_API_LIVE_LOOKBACK_SECONDS`, 120 s).
+- `{"type": "heartbeat", "at": "..."}` when the window holds no sample pairs yet.
+- `{"type": "store_unavailable", "at": "..."}` when the database cannot be queried.
+
+Clients may send `{"type": "ping"}` and receive `{"type": "pong"}`; any other message gets `{"type": "error", "reason": "unsupported message"}`. Frames queue per client (`NETPULSE_API_LIVE_QUEUE_SIZE`, 16); a client that falls behind is disconnected with close code `1013` and reason `slow consumer`.
+
 The `network` container runs Mininet and Open vSwitch, which need Linux network namespaces, so it runs **privileged**. On Linux it uses the host kernel directly. On macOS and Windows it runs inside Docker Desktop's Linux VM. By default Open vSwitch uses its userspace datapath (`NETWORK_OVS_DATAPATH=user`), which needs no kernel module; on a Linux host with the `openvswitch` module loaded you can switch to `kernel` for better throughput.
 
 The full stack, including the privileged network container, has been verified with Docker Desktop on macOS (Apple silicon): all hosts reach each other and the collector receives counters from every switch.

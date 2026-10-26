@@ -1,9 +1,11 @@
 import logging
 from collections.abc import Iterable, Mapping
+from datetime import UTC, datetime, timedelta
 from itertools import groupby, pairwise
 from typing import Final, LiteralString
 
 import psycopg
+from psycopg import sql
 from psycopg.rows import TupleRow, dict_row
 from psycopg_pool import AsyncConnectionPool
 
@@ -27,31 +29,32 @@ HISTORY_QUERY: Final[LiteralString] = """
     LIMIT %(limit)s
 """
 
-LATEST_QUERIES: Final[dict[bool, LiteralString]] = {
-    False: """
-        SELECT dpid, port_no, time AS collected_at,
-               rx_packets, tx_packets, rx_bytes, tx_bytes,
-               rx_dropped, tx_dropped, rx_errors, tx_errors, duration_sec
-        FROM (
-            SELECT *, row_number() OVER (PARTITION BY dpid, port_no ORDER BY time DESC) AS recency
-            FROM port_stats
-        ) AS ranked
-        WHERE recency <= 2
-        ORDER BY dpid, port_no, time
-    """,
-    True: """
-        SELECT dpid, port_no, time AS collected_at,
-               rx_packets, tx_packets, rx_bytes, tx_bytes,
-               rx_dropped, tx_dropped, rx_errors, tx_errors, duration_sec
-        FROM (
-            SELECT *, row_number() OVER (PARTITION BY dpid, port_no ORDER BY time DESC) AS recency
-            FROM port_stats
-            WHERE dpid = %(dpid)s::numeric
-        ) AS ranked
-        WHERE recency <= 2
-        ORDER BY dpid, port_no, time
-    """,
-}
+LATEST_QUERY: Final = sql.SQL("""
+    SELECT dpid, port_no, time AS collected_at,
+           rx_packets, tx_packets, rx_bytes, tx_bytes,
+           rx_dropped, tx_dropped, rx_errors, tx_errors, duration_sec
+    FROM (
+        SELECT *, row_number() OVER (PARTITION BY dpid, port_no ORDER BY time DESC) AS recency
+        FROM port_stats
+        {where}
+    ) AS ranked
+    WHERE recency <= 2
+    ORDER BY dpid, port_no, time
+""")
+LATEST_SWITCH_CONDITION: Final = sql.SQL("dpid = %(dpid)s::numeric")
+LATEST_LOOKBACK_CONDITION: Final = sql.SQL("time >= %(since)s")
+
+
+def latest_samples_query(*, by_switch: bool, with_lookback: bool) -> sql.Composed:
+    conditions: list[sql.SQL] = []
+    if by_switch:
+        conditions.append(LATEST_SWITCH_CONDITION)
+    if with_lookback:
+        conditions.append(LATEST_LOOKBACK_CONDITION)
+    where = (
+        sql.SQL("WHERE {}").format(sql.SQL(" AND ").join(conditions)) if conditions else sql.SQL("")
+    )
+    return LATEST_QUERY.format(where=where)
 
 
 def sample_from_row(row: Mapping[str, object]) -> PortSample:
@@ -72,7 +75,7 @@ def pair_latest_samples(samples: Iterable[PortSample]) -> list[SamplePair]:
 
 
 async def _fetch_samples(
-    pool: ConnectionPool, query: LiteralString, parameters: Mapping[str, object]
+    pool: ConnectionPool, query: LiteralString | sql.Composed, parameters: Mapping[str, object]
 ) -> list[PortSample]:
     try:
         async with (
@@ -103,9 +106,16 @@ class TimescaleKpiHistoryQuery:
 
 
 class TimescaleLatestSamplesQuery:
-    def __init__(self, pool: ConnectionPool) -> None:
+    def __init__(self, pool: ConnectionPool, *, lookback_seconds: int | None = None) -> None:
         self._pool = pool
+        self._lookback = None if lookback_seconds is None else timedelta(seconds=lookback_seconds)
 
     async def fetch(self, dpid: DatapathId | None) -> list[SamplePair]:
-        samples = await _fetch_samples(self._pool, LATEST_QUERIES[dpid is not None], {"dpid": dpid})
+        query = latest_samples_query(
+            by_switch=dpid is not None, with_lookback=self._lookback is not None
+        )
+        parameters: dict[str, object] = {"dpid": dpid}
+        if self._lookback is not None:
+            parameters["since"] = datetime.now(UTC) - self._lookback
+        samples = await _fetch_samples(self._pool, query, parameters)
         return pair_latest_samples(samples)

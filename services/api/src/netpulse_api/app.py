@@ -5,6 +5,7 @@ from starlette.types import Lifespan
 
 from netpulse_api.health import DatabaseProbe
 from netpulse_api.kpis import KpiHistoryQuery, LatestSamplesQuery
+from netpulse_api.live import LiveKpiBroadcaster
 from netpulse_api.routes.health import build_health_router
 from netpulse_api.routes.kpis import build_kpis_router
 from netpulse_api.routes.stats import build_stats_router
@@ -22,6 +23,7 @@ def create_app(
     kpi_history: KpiHistoryQuery | None = None,
     latest_samples: LatestSamplesQuery | None = None,
     link_capacity_bps: int | None = None,
+    live_broadcaster: LiveKpiBroadcaster | None = None,
     lifespan: Lifespan[FastAPI] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="NetPulse API", version=SERVICE_VERSION, lifespan=lifespan)
@@ -31,5 +33,5 @@ def create_app(
     app.include_router(
         build_kpis_router(kpi_history, latest_samples, link_capacity_bps=link_capacity_bps)
     )
-    app.include_router(build_telemetry_router(SERVICE_VERSION))
+    app.include_router(build_telemetry_router(SERVICE_VERSION, broadcaster=live_broadcaster))
     return app

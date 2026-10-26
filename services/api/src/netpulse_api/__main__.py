@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -11,16 +12,23 @@ from starlette.types import Lifespan
 
 from netpulse_api.app import create_app
 from netpulse_api.health import PostgresProbe
+from netpulse_api.live import LiveKpiBroadcaster
 from netpulse_api.settings import ApiSettings
 from netpulse_api.timescale_kpis import TimescaleKpiHistoryQuery, TimescaleLatestSamplesQuery
 from netpulse_api.timescale_stats import ConnectionPool, TimescalePortStatsQuery
 
 
-def pool_lifespan(pool: ConnectionPool) -> Lifespan[FastAPI]:
+def storage_lifespan(pool: ConnectionPool, broadcaster: LiveKpiBroadcaster) -> Lifespan[FastAPI]:
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        stop = asyncio.Event()
         async with pool:
-            yield
+            live_kpis = asyncio.create_task(broadcaster.run(stop), name="live-kpis")
+            try:
+                yield
+            finally:
+                stop.set()
+                await live_kpis
 
     return lifespan
 
@@ -38,13 +46,20 @@ def build_app(settings: ApiSettings) -> FastAPI:
         check=AsyncConnectionPool.check_connection,
         name="api",
     )
+    broadcaster = LiveKpiBroadcaster(
+        TimescaleLatestSamplesQuery(pool, lookback_seconds=settings.live_lookback_seconds),
+        link_capacity_bps=settings.link_capacity_bps,
+        interval_seconds=settings.live_interval_seconds,
+        queue_size=settings.live_queue_size,
+    )
     return create_app(
         database_probe=PostgresProbe(dsn, timeout_seconds=settings.database_timeout_seconds),
         port_stats_query=TimescalePortStatsQuery(pool),
         kpi_history=TimescaleKpiHistoryQuery(pool, link_capacity_bps=settings.link_capacity_bps),
         latest_samples=TimescaleLatestSamplesQuery(pool),
         link_capacity_bps=settings.link_capacity_bps,
-        lifespan=pool_lifespan(pool),
+        live_broadcaster=broadcaster,
+        lifespan=storage_lifespan(pool, broadcaster),
     )
 
 
