@@ -36,6 +36,15 @@ class WebhookAlertNotifier:
             response = await self._http.post(self._url, json=events_payload(events))
             response.raise_for_status()
         except httpx2.HTTPError as error:
-            logger.error("alert webhook delivery of %d events failed: %s", len(events), error)
+            logger.error(
+                "alert webhook delivery of %d events failed: %s", len(events), describe_error(error)
+            )
             return
         logger.info("delivered %d alert events to webhook", len(events))
+
+
+def describe_error(error: httpx2.HTTPError) -> str:
+    name = type(error).__name__
+    if isinstance(error, httpx2.HTTPStatusError):
+        return f"{name} status={error.response.status_code}"
+    return name

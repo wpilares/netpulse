@@ -9,6 +9,7 @@ from netpulse_collector.detector import AnomalyDetector, DetectionObserver
 from netpulse_core import (
     AlertEvent,
     AlertPolicy,
+    AlertState,
     DetectionConfig,
     PortStats,
     PortStatsReport,
@@ -54,8 +55,27 @@ def _report(cycle: int, *, ports: Sequence[PortStats] | None = None) -> PortStat
     )
 
 
-def _detector() -> AnomalyDetector:
-    return AnomalyDetector(config=CONFIG, policy=POLICY, link_capacity_bps=10_000_000)
+def _detector(prune_after_cycles: int = 60) -> AnomalyDetector:
+    return AnomalyDetector(
+        config=CONFIG,
+        policy=POLICY,
+        link_capacity_bps=10_000_000,
+        prune_after_cycles=prune_after_cycles,
+    )
+
+
+def _open_state(opened_at: datetime) -> AlertState:
+    return AlertState(
+        key=(1, 1, "rx_bps"),
+        severity="warning",
+        opened_at=opened_at,
+        last_seen_at=opened_at,
+        value=5_000.0,
+        expected=1_600.0,
+        zscore=4.0,
+        status="open",
+        resolved_at=None,
+    )
 
 
 def _warm_up(detector: AnomalyDetector) -> int:
@@ -120,6 +140,61 @@ def test_silence_resolves_the_alert_after_the_policy_window() -> None:
     assert quiet[1][0].state.resolved_at == T0 + timedelta(seconds=INTERVAL * (cycle + 2))
 
 
+def test_seeded_open_alert_resolves_after_the_policy_window() -> None:
+    detector = _detector()
+    detector.seed([_open_state(T0)])
+
+    inside_window = detector.observe(_report(1))
+    past_window = detector.observe(_report(2))
+
+    assert inside_window == ()
+    assert [(event.kind, event.state.key) for event in past_window] == [
+        ("resolved", (1, 1, "rx_bps"))
+    ]
+    assert past_window[0].state.opened_at == T0
+    assert past_window[0].state.resolved_at == T0 + timedelta(seconds=INTERVAL * 2)
+
+
+def test_seeded_open_alert_is_escalated_by_a_new_signal() -> None:
+    detector = _detector()
+    cycle = _warm_up(detector) + 1
+    seeded_at = T0 + timedelta(seconds=INTERVAL * (cycle - 1))
+    detector.seed([_open_state(seeded_at)])
+
+    events = detector.observe(_report(cycle, ports=[_port(1, cycle, extra_rx_bytes=SPIKE_BYTES)]))
+
+    assert [event.kind for event in events] == ["escalated"]
+    assert events[0].state.opened_at == seeded_at
+    assert events[0].state.severity == "critical"
+
+
+def _observe_port_two_gap(prune_after_cycles: int, gap: int) -> tuple[AlertEvent, ...]:
+    detector = _detector(prune_after_cycles=prune_after_cycles)
+    warm_cycles = range(1, WARMUP + 2)
+    gap_cycles = range(warm_cycles.stop, warm_cycles.stop + gap)
+    back, spike = gap_cycles.stop, gap_cycles.stop + 1
+    for cycle in warm_cycles:
+        assert detector.observe(_report(cycle, ports=[_port(1, cycle), _port(2, cycle)])) == ()
+    for cycle in gap_cycles:
+        assert detector.observe(_report(cycle, ports=[_port(1, cycle)])) == ()
+    assert detector.observe(_report(back, ports=[_port(1, back), _port(2, back)])) == ()
+    return detector.observe(
+        _report(spike, ports=[_port(1, spike), _port(2, spike, extra_rx_bytes=SPIKE_BYTES)])
+    )
+
+
+def test_port_absent_longer_than_the_prune_window_restarts_its_warm_up() -> None:
+    events = _observe_port_two_gap(prune_after_cycles=2, gap=3)
+
+    assert events == ()
+
+
+def test_port_absent_within_the_prune_window_keeps_its_baseline() -> None:
+    events = _observe_port_two_gap(prune_after_cycles=3, gap=3)
+
+    assert [(event.kind, event.state.key) for event in events] == [("opened", (1, 2, "rx_bps"))]
+
+
 def test_counter_reset_yields_no_events() -> None:
     detector = _detector()
     cycle = _warm_up(detector) + 1
@@ -164,11 +239,17 @@ class RecordingAlertRepository:
     def __init__(self) -> None:
         self.applied: list[Sequence[AlertEvent]] = []
 
+    async def load_open(self) -> tuple[AlertState, ...]:
+        return ()
+
     async def apply(self, events: Sequence[AlertEvent]) -> None:
         self.applied.append(events)
 
 
 class FailingAlertRepository:
+    async def load_open(self) -> tuple[AlertState, ...]:
+        return ()
+
     async def apply(self, events: Sequence[AlertEvent]) -> None:
         raise AlertWriteError("alerts table unavailable")
 

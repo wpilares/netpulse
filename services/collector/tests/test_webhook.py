@@ -1,6 +1,6 @@
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 
 import httpx2
@@ -8,6 +8,7 @@ import pytest
 
 from netpulse_collector.webhook import WebhookAlertNotifier, alert_payload
 from netpulse_core import AlertEvent, AlertState
+from netpulse_core.settings import HTTP_CLIENT_LOGGER, quiet_http_client_logging
 
 WEBHOOK_URL = "https://hooks.example.test/netpulse"
 Handler = Callable[[httpx2.Request], httpx2.Response]
@@ -33,6 +34,15 @@ RESOLVED = AlertEvent(
         update={"status": "resolved", "resolved_at": datetime(2026, 10, 20, 12, 1, tzinfo=UTC)}
     ),
 )
+
+
+@pytest.fixture
+def service_logging() -> Iterator[None]:
+    http_logger = logging.getLogger(HTTP_CLIENT_LOGGER)
+    previous = http_logger.level
+    quiet_http_client_logging()
+    yield
+    http_logger.setLevel(previous)
 
 
 def _notifier(
@@ -89,22 +99,31 @@ async def test_notify_skips_the_request_without_events() -> None:
     assert requests == []
 
 
-async def test_server_errors_are_logged_not_raised(caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.usefixtures("service_logging")
+async def test_server_errors_are_logged_without_the_url(caplog: pytest.LogCaptureFixture) -> None:
     notifier = _notifier(lambda _: httpx2.Response(500))
 
-    with caplog.at_level(logging.ERROR, logger="netpulse_collector.webhook"):
+    with caplog.at_level(logging.DEBUG):
         await notifier.notify([OPENED])
 
+    assert "HTTPStatusError" in caplog.text
     assert "500" in caplog.text
+    assert WEBHOOK_URL not in caplog.text
+    assert "hooks.example.test" not in caplog.text
 
 
-async def test_transport_errors_are_logged_not_raised(caplog: pytest.LogCaptureFixture) -> None:
+@pytest.mark.usefixtures("service_logging")
+async def test_transport_errors_are_logged_without_the_url(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     def handler(_: httpx2.Request) -> httpx2.Response:
-        raise httpx2.ConnectError("connection refused")
+        raise httpx2.ConnectError(f"connection refused by {WEBHOOK_URL}")
 
     notifier = _notifier(handler)
 
-    with caplog.at_level(logging.ERROR, logger="netpulse_collector.webhook"):
+    with caplog.at_level(logging.DEBUG):
         await notifier.notify([OPENED])
 
-    assert "connection refused" in caplog.text
+    assert "ConnectError" in caplog.text
+    assert WEBHOOK_URL not in caplog.text
+    assert "hooks.example.test" not in caplog.text

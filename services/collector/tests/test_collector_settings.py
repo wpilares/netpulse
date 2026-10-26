@@ -1,8 +1,11 @@
+import logging
+
 import pytest
 from pydantic import ValidationError
 
 from netpulse_collector.settings import CollectorSettings
 from netpulse_core import AlertPolicy, DetectionConfig
+from netpulse_core.settings import HTTP_CLIENT_LOGGER, quiet_http_client_logging
 
 
 def test_defaults_target_the_compose_controller(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -135,3 +138,17 @@ def test_critical_z_must_exceed_warning_z(monkeypatch: pytest.MonkeyPatch) -> No
 
     with pytest.raises(ValidationError, match="critical_z"):
         CollectorSettings()
+
+
+def test_quiet_http_client_logging_hides_request_lines(caplog: pytest.LogCaptureFixture) -> None:
+    http_logger = logging.getLogger(HTTP_CLIENT_LOGGER)
+    previous = http_logger.level
+    try:
+        quiet_http_client_logging()
+        with caplog.at_level(logging.DEBUG):
+            http_logger.info("HTTP Request: POST https://hooks.example.test/secret-token")
+            http_logger.warning("HTTP Request: retrying")
+    finally:
+        http_logger.setLevel(previous)
+
+    assert [record.getMessage() for record in caplog.records] == ["HTTP Request: retrying"]

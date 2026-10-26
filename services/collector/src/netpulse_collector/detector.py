@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 
 from netpulse_collector.alerts import AlertNotifier, AlertRepository, AlertWriteError
@@ -28,6 +28,8 @@ logger = logging.getLogger(__name__)
 type Clock = Callable[[], datetime]
 type PortKey = tuple[DatapathId, PortNumber]
 
+DEFAULT_PRUNE_AFTER_CYCLES = 60
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -41,20 +43,30 @@ class AnomalyDetector:
         policy: AlertPolicy,
         link_capacity_bps: int | None,
         clock: Clock = utc_now,
+        prune_after_cycles: int = DEFAULT_PRUNE_AFTER_CYCLES,
     ) -> None:
         self._config = config
         self._policy = policy
         self._link_capacity_bps = link_capacity_bps
         self._clock = clock
+        self._prune_after_cycles = prune_after_cycles
         self._samples: dict[PortKey, PortSample] = {}
         self._baselines: dict[BaselineKey, Baseline] = {}
         self._states: dict[AlertKey, AlertState] = {}
+        self._absent_cycles: dict[PortKey, int] = {}
+
+    def seed(self, states: Iterable[AlertState]) -> None:
+        for state in states:
+            self._states[state.key] = state
 
     def observe(self, report: PortStatsReport) -> tuple[AlertEvent, ...]:
         signals: list[AnomalySignal] = []
+        seen: set[PortKey] = set()
         for switch in report.switches:
             for sample in port_samples(switch):
+                seen.add((sample.dpid, sample.stats.port_no))
                 signals.extend(self._score(sample))
+        self._prune_vanished_ports(seen)
         self._states, events = evaluate_alerts(
             self._states, signals, now=self._report_time(report), policy=self._policy
         )
@@ -72,6 +84,23 @@ class AnomalyDetector:
         kpis = compute_port_kpis(previous, sample, link_capacity_bps=self._link_capacity_bps)
         self._baselines, signals = detect_port_anomalies(self._baselines, kpis, self._config)
         return signals
+
+    def _prune_vanished_ports(self, seen: set[PortKey]) -> None:
+        for key in list(self._samples):
+            if key in seen:
+                self._absent_cycles.pop(key, None)
+                continue
+            absent = self._absent_cycles.get(key, 0) + 1
+            if absent <= self._prune_after_cycles:
+                self._absent_cycles[key] = absent
+                continue
+            del self._samples[key]
+            del self._absent_cycles[key]
+            self._baselines = {
+                baseline_key: baseline
+                for baseline_key, baseline in self._baselines.items()
+                if baseline_key[:2] != key
+            }
 
     def _report_time(self, report: PortStatsReport) -> datetime:
         collected = [switch.collected_at for switch in report.switches]
