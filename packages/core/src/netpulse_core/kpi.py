@@ -128,6 +128,8 @@ def compute_port_kpis(
     rx_bps = _bits_per_second(rx_bytes, interval)
     tx_bps = _bits_per_second(tx_bytes, interval)
     packets = _total_delta(rx_packets, tx_packets)
+    dropped = _total_delta(rx_dropped, tx_dropped)
+    errors = _total_delta(rx_errors, tx_errors)
     return PortKpis(
         dpid=current.dpid,
         port_no=current.stats.port_no,
@@ -137,8 +139,8 @@ def compute_port_kpis(
         tx_bps=tx_bps,
         rx_pps=_per_second(rx_packets, interval),
         tx_pps=_per_second(tx_packets, interval),
-        drop_rate=_ratio(_total_delta(rx_dropped, tx_dropped), packets),
-        error_rate=_ratio(_total_delta(rx_errors, tx_errors), packets),
+        drop_rate=_share_of_attempted(dropped, packets),
+        error_rate=_share_of_attempted(errors, packets),
         utilization=_utilization(rx_bps, tx_bps, link_capacity_bps),
         counter_reset=False,
     )
@@ -187,10 +189,13 @@ def _bits_per_second(byte_delta: Delta, interval: float) -> Rate:
     return byte_delta * 8 / interval
 
 
-def _ratio(numerator: Delta, denominator: Delta) -> Rate:
-    if numerator is None or denominator is None or denominator == 0:
+def _share_of_attempted(failed: Delta, delivered: Delta) -> Rate:
+    if failed is None or delivered is None:
         return None
-    return numerator / denominator
+    attempted = delivered + failed
+    if attempted == 0:
+        return None
+    return failed / attempted
 
 
 def _utilization(rx_bps: Rate, tx_bps: Rate, link_capacity_bps: int | None) -> Rate:

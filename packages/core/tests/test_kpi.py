@@ -104,8 +104,8 @@ def test_normal_deltas_yield_rates_over_duration_interval() -> None:
     assert kpis.tx_bps == 3_200.0
     assert kpis.rx_pps == 2.0
     assert kpis.tx_pps == 1.0
-    assert kpis.drop_rate == pytest.approx(0.1)
-    assert kpis.error_rate == pytest.approx(0.3)
+    assert kpis.drop_rate == pytest.approx(3 / 33)
+    assert kpis.error_rate == pytest.approx(9 / 39)
     assert kpis.utilization == pytest.approx(6_400 / CAPACITY_BPS)
     assert kpis.counter_reset is False
 
@@ -163,7 +163,7 @@ def test_unknown_counters_only_blank_dependent_rates() -> None:
     assert kpis.tx_bps == 3_200.0
     assert kpis.rx_pps == 2.0
     assert kpis.tx_pps == 1.0
-    assert kpis.error_rate == pytest.approx(0.3)
+    assert kpis.error_rate == pytest.approx(9 / 39)
     assert kpis.counter_reset is False
 
 
@@ -178,8 +178,10 @@ def test_unknown_previous_counter_blanks_rate() -> None:
     assert kpis.rx_pps == 2.0
 
 
-def test_zero_packet_delta_leaves_ratios_unknown() -> None:
-    current = _next_sample(rx_packets=10, tx_packets=5, rx_dropped=0, tx_dropped=0)
+def test_no_attempted_frames_leaves_ratios_unknown() -> None:
+    current = _next_sample(
+        rx_packets=10, tx_packets=5, rx_dropped=0, tx_dropped=0, rx_errors=0, tx_errors=0
+    )
 
     kpis = compute_port_kpis(_sample(), current, link_capacity_bps=CAPACITY_BPS)
 
@@ -188,6 +190,24 @@ def test_zero_packet_delta_leaves_ratios_unknown() -> None:
     assert kpis.drop_rate is None
     assert kpis.error_rate is None
     assert kpis.rx_bps == 6_400.0
+
+
+def test_drops_without_delivered_packets_are_a_total_loss() -> None:
+    current = _next_sample(rx_packets=10, tx_packets=5, rx_dropped=0, tx_dropped=5)
+
+    kpis = compute_port_kpis(_sample(), current, link_capacity_bps=CAPACITY_BPS)
+
+    assert kpis.drop_rate == 1.0
+    assert kpis.error_rate == 1.0
+
+
+def test_rates_count_dropped_and_errored_frames_as_attempted() -> None:
+    current = _next_sample(rx_dropped=5, tx_dropped=5, rx_errors=10, tx_errors=20)
+
+    kpis = compute_port_kpis(_sample(), current, link_capacity_bps=CAPACITY_BPS)
+
+    assert kpis.drop_rate == pytest.approx(10 / 40)
+    assert kpis.error_rate == pytest.approx(30 / 60)
 
 
 def test_utilization_uses_busiest_direction() -> None:
