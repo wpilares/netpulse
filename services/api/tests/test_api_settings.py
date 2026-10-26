@@ -26,3 +26,31 @@ def test_database_pool_size_defaults_and_rejects_zero(monkeypatch: pytest.Monkey
     monkeypatch.setenv("NETPULSE_API_DATABASE_POOL_SIZE", "0")
     with pytest.raises(ValidationError):
         ApiSettings()
+
+
+def test_live_settings_have_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("LIVE_INTERVAL_SECONDS", "LIVE_QUEUE_SIZE", "LIVE_LOOKBACK_SECONDS"):
+        monkeypatch.delenv(f"NETPULSE_API_{name}", raising=False)
+
+    settings = ApiSettings()
+
+    assert settings.live_interval_seconds == 5.0
+    assert settings.live_queue_size == 16
+    assert settings.live_lookback_seconds == 120
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("LIVE_INTERVAL_SECONDS", "0"),
+        ("LIVE_QUEUE_SIZE", "0"),
+        ("LIVE_LOOKBACK_SECONDS", "-1"),
+    ],
+)
+def test_live_settings_reject_non_positive_values(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(f"NETPULSE_API_{name}", value)
+
+    with pytest.raises(ValidationError):
+        ApiSettings()
