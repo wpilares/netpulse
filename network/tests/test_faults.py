@@ -1,7 +1,16 @@
 import pytest
 
-from netpulse_network.faults import Fault, FaultKind, Schedule, describe_fault, plan_faults
-from netpulse_network.topology import Link, build_tree
+from netpulse_network.faults import (
+    Fault,
+    FaultKind,
+    Schedule,
+    choose_probe_host,
+    describe_fault,
+    plan_faults,
+    probe_cleanup_commands,
+    probe_commands,
+)
+from netpulse_network.topology import Link, TopologySpec, build_tree
 
 SPEC = build_tree(depth=2, fanout=2)
 HOST_LINKS = {link for link in SPEC.links if link.target in SPEC.hosts}
@@ -153,6 +162,70 @@ def test_host_down_fault_requires_its_host() -> None:
 def test_loss_fault_carries_no_host() -> None:
     with pytest.raises(ValueError, match="host"):
         Fault(kind="loss", link=Link("s3", "h3"), duration_seconds=30, loss_percent=20, host="h3")
+
+
+def _host_down(host: str, switch: str) -> Fault:
+    return Fault(
+        kind="host_down", link=Link(switch, host), duration_seconds=30, loss_percent=20, host=host
+    )
+
+
+def test_probe_host_is_a_sibling_behind_the_same_switch() -> None:
+    assert choose_probe_host(_host_down("h1", "s2"), SPEC) == "h2"
+    assert choose_probe_host(_host_down("h2", "s2"), SPEC) == "h1"
+
+
+def test_probe_host_falls_back_to_any_other_host() -> None:
+    spec = TopologySpec(
+        switches=("s1", "s2"),
+        hosts=("h1", "h2"),
+        links=(Link("s1", "s2"), Link("s1", "h1"), Link("s2", "h2")),
+    )
+
+    assert choose_probe_host(_host_down("h1", "s1"), spec) == "h2"
+
+
+def test_probe_host_needs_another_host() -> None:
+    spec = TopologySpec(switches=("s1",), hosts=("h1",), links=(Link("s1", "h1"),))
+
+    with pytest.raises(ValueError, match="host"):
+        choose_probe_host(_host_down("h1", "s1"), spec)
+
+
+def test_probe_pins_the_neighbour_then_floods_it_for_the_fault_duration() -> None:
+    commands = probe_commands(
+        target_ip="10.0.0.4",
+        target_mac="00:00:00:00:00:04",
+        interface="h1-eth0",
+        duration_seconds=30,
+    )
+
+    assert commands == (
+        (
+            "ip",
+            "neigh",
+            "replace",
+            "10.0.0.4",
+            "lladdr",
+            "00:00:00:00:00:04",
+            "dev",
+            "h1-eth0",
+            "nud",
+            "permanent",
+        ),
+        ("ping", "-f", "-q", "-w", "30", "-s", "1000", "10.0.0.4"),
+    )
+
+
+def test_probe_cleanup_forgets_the_pinned_neighbour() -> None:
+    assert probe_cleanup_commands(target_ip="10.0.0.4", interface="h1-eth0") == (
+        "ip",
+        "neigh",
+        "del",
+        "10.0.0.4",
+        "dev",
+        "h1-eth0",
+    )
 
 
 def test_schedule_starts_with_immediate_traffic_and_a_delayed_fault() -> None:
