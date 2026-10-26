@@ -12,7 +12,7 @@ def _plan(
     *,
     count: int = len(SPEC.links),
     seed: int = 11,
-    kinds: tuple[FaultKind, ...] = ("loss", "link_down"),
+    kinds: tuple[FaultKind, ...] = ("loss", "host_down"),
     loss_percent: int = 20,
     duration_seconds: int = 30,
 ) -> tuple[Fault, ...]:
@@ -36,8 +36,46 @@ def test_plan_returns_the_requested_number_of_faults() -> None:
     assert len(_plan(count=9)) == 9
 
 
-def test_kinds_alternate_strictly() -> None:
-    assert [fault.kind for fault in _plan(count=6)] == ["loss", "link_down"] * 3
+def test_kinds_alternate_on_host_links_and_switch_links_only_lose_packets() -> None:
+    faults = _plan()
+
+    host_faults = faults[: len(HOST_LINKS)]
+    switch_faults = faults[len(HOST_LINKS) :]
+
+    assert [fault.kind for fault in host_faults] == ["loss", "host_down"] * (len(HOST_LINKS) // 2)
+    assert {fault.kind for fault in switch_faults} == {"loss"}
+
+
+@pytest.mark.parametrize("seed", [1, 11, 42])
+def test_host_down_is_only_scheduled_on_host_links(seed: int) -> None:
+    for fault in _plan(count=len(SPEC.links) * 3, seed=seed):
+        if fault.kind == "host_down":
+            assert fault.link in HOST_LINKS
+            assert fault.host in SPEC.hosts
+            assert fault.host in (fault.link.source, fault.link.target)
+        else:
+            assert fault.host is None
+
+
+def test_host_down_alone_cycles_only_host_links() -> None:
+    faults = _plan(count=len(HOST_LINKS) * 2, kinds=("host_down",))
+
+    assert {fault.kind for fault in faults} == {"host_down"}
+    assert {fault.link for fault in faults} == HOST_LINKS
+    assert len(faults) == len(HOST_LINKS) * 2
+
+
+def test_host_down_without_host_links_is_rejected() -> None:
+    with pytest.raises(ValueError, match="host"):
+        plan_faults(
+            sorted(SWITCH_LINKS, key=str),
+            hosts=SPEC.hosts,
+            count=1,
+            kinds=("host_down",),
+            duration_seconds=30,
+            loss_percent=20,
+            seed=11,
+        )
 
 
 def test_host_links_are_hit_before_switch_links() -> None:
@@ -99,10 +137,22 @@ def test_loss_fault_description_names_the_link_and_rate() -> None:
     assert describe_fault(fault) == "loss 20% on s2 <-> h1 for 30s"
 
 
-def test_link_down_description_names_the_link() -> None:
-    fault = Fault(kind="link_down", link=Link("s1", "s2"), duration_seconds=30, loss_percent=20)
+def test_host_down_description_names_the_host_and_its_switch() -> None:
+    fault = Fault(
+        kind="host_down", link=Link("s3", "h3"), duration_seconds=30, loss_percent=20, host="h3"
+    )
 
-    assert describe_fault(fault) == "link down s1 <-> s2 for 30s"
+    assert describe_fault(fault) == "host down h3 behind s3 for 30s"
+
+
+def test_host_down_fault_requires_its_host() -> None:
+    with pytest.raises(ValueError, match="host"):
+        Fault(kind="host_down", link=Link("s3", "h3"), duration_seconds=30, loss_percent=20)
+
+
+def test_loss_fault_carries_no_host() -> None:
+    with pytest.raises(ValueError, match="host"):
+        Fault(kind="loss", link=Link("s3", "h3"), duration_seconds=30, loss_percent=20, host="h3")
 
 
 def test_schedule_starts_with_immediate_traffic_and_a_delayed_fault() -> None:
