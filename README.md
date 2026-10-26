@@ -133,7 +133,7 @@ Clients may send `{"type": "ping"}` and receive `{"type": "pong"}`; any other me
 
 Each inter-switch link appears once with the lower `dpid` as `source`. A switch port that is neither reserved nor the end of a link is assumed to face a host and becomes a `host` node attached to its switch. `503` means the controller URL is not configured or the controller did not answer.
 
-The `network` container runs Mininet and Open vSwitch, which need Linux network namespaces, so it runs **privileged**. On Linux it uses the host kernel directly. On macOS and Windows it runs inside Docker Desktop's Linux VM. By default Open vSwitch uses its userspace datapath (`NETWORK_OVS_DATAPATH=user`), which needs no kernel module; on a Linux host with the `openvswitch` module loaded you can switch to `kernel` for better throughput.
+The `network` container runs Mininet and Open vSwitch, which need Linux network namespaces, so it runs **privileged**. On Linux it uses the host kernel directly. On macOS and Windows it runs inside Docker Desktop's Linux VM. By default Open vSwitch uses its userspace datapath (`NETWORK_OVS_DATAPATH=user`), which needs no kernel module; on a Linux host with the `openvswitch` module loaded you can switch to `kernel` for better throughput. The userspace datapath forwards packets whose checksums the kernel left for hardware offload to compute, so hosts would drop every TCP segment with `InCsumErrors`; the network disables TX checksum offload (`ethtool -K <intf> tx off`) on every host and switch interface right after the switches start.
 
 The full stack, including the privileged network container, has been verified with Docker Desktop on macOS (Apple silicon): all hosts reach each other and the collector receives counters from every switch.
 

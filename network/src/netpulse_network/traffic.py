@@ -104,6 +104,9 @@ def plan_rounds(
     return tuple(planned)
 
 
+_CONNECT_TIMEOUT_MS = 3000
+
+
 def iperf_server_command() -> tuple[str, ...]:
     return ("iperf3", "-s", "-D")
 
@@ -113,9 +116,15 @@ def iperf_client_command(server_ip: str, flow: TrafficFlow) -> tuple[str, ...]:
         "iperf3",
         "-c",
         server_ip,
+        "--connect-timeout",
+        str(_CONNECT_TIMEOUT_MS),
         "-u",
         "-b",
         f"{flow.bandwidth_mbps}M",
         "-t",
         str(flow.duration_seconds),
     )
+
+
+def disable_tx_offload_command(interface: str) -> tuple[str, ...]:
+    return ("ethtool", "-K", interface, "tx", "off")

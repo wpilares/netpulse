@@ -11,6 +11,7 @@ from netpulse_network.config import NetworkConfig
 from netpulse_network.topology import TopologySpec
 from netpulse_network.traffic import (
     TrafficRound,
+    disable_tx_offload_command,
     iperf_client_command,
     iperf_server_command,
     plan_rounds,
@@ -66,6 +67,14 @@ def _shell(command: tuple[str, ...]) -> str:
     return " ".join(command)
 
 
+def _disable_tx_offload(network: Mininet) -> None:
+    for node in (*network.hosts, *network.switches):
+        interfaces = [intf.name for intf in node.intfList() if intf.name != "lo"]
+        for interface in interfaces:
+            node.cmd(_shell(disable_tx_offload_command(interface)))
+        info(f"*** Disabled TX checksum offload on {len(interfaces)} interfaces of {node.name}\n")
+
+
 def _start_servers(network: Mininet, spec: TopologySpec) -> None:
     for name in spec.hosts:
         network.get(name).cmd(_shell(iperf_server_command()))
@@ -107,6 +116,7 @@ def run(spec: TopologySpec, config: NetworkConfig, stop: threading.Event) -> Non
     network.build()
     network.start()
     try:
+        _disable_tx_offload(network)
         network.waitConnected(timeout=30)
         loss = network.pingAll(timeout="1")
         info(f"*** Initial reachability check: {loss}% packet loss\n")
