@@ -1,3 +1,5 @@
+import { isOneOf, isRecord } from "../../lib/guards";
+
 const HEALTH_PATH = "/health";
 
 const SERVICE_STATUSES = ["ok", "degraded"] as const;
@@ -16,11 +18,6 @@ export type ApiHealth =
   | { readonly kind: "loading" }
   | { readonly kind: "offline" }
   | { readonly kind: "online"; readonly report: ApiHealthReport };
-
-const isOneOf = <T extends string>(options: readonly T[], value: unknown): value is T =>
-  options.some((option) => option === value);
-
-const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
 
 export const parseApiHealth = (payload: unknown): ApiHealthReport | null => {
   if (!isRecord(payload)) {

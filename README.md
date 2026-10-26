@@ -42,7 +42,7 @@ Data flows left to right. The controller requests `OFPPortStatsRequest` from eve
 | Controller | `services/controller` | OS-Ken 4 (Python 3.13) | Tracks switches, installs forwarding, discovers links with LLDP, polls port stats, serves stats and topology over REST |
 | Collector | `services/collector` | asyncio, httpx2, psycopg 3 | Polls the controller, validates samples, writes them idempotently with retry and backoff |
 | API | `services/api` | FastAPI, httpx2, psycopg 3, uvicorn | `/health`, port statistics, KPIs, topology and service info under `/api/v1`, `/ws/telemetry` WebSocket |
-| Web | `web` | Bun, Vite, React 19, TypeScript, Vitest, Biome | Dashboard shell with live API health status |
+| Web | `web` | Bun, Vite, React 19, TypeScript, Vitest, Biome | Live dashboard: KPI summary cards, topology graph, per-port throughput charts, reconnecting WebSocket client |
 | Database | `db/migrations` | TimescaleDB 2.30 on PostgreSQL 18, dbmate | Hypertable, continuous aggregate and policies as versioned SQL |
 
 Design decisions are recorded as ADRs in [`docs/adr`](docs/adr).
@@ -136,6 +136,10 @@ Each inter-switch link appears once with the lower `dpid` as `source`. A switch 
 The `network` container runs Mininet and Open vSwitch, which need Linux network namespaces, so it runs **privileged**. On Linux it uses the host kernel directly. On macOS and Windows it runs inside Docker Desktop's Linux VM. By default Open vSwitch uses its userspace datapath (`NETWORK_OVS_DATAPATH=user`), which needs no kernel module; on a Linux host with the `openvswitch` module loaded you can switch to `kernel` for better throughput.
 
 The full stack, including the privileged network container, has been verified with Docker Desktop on macOS (Apple silicon): all hosts reach each other and the collector receives counters from every switch.
+
+### Dashboard
+
+The web app at http://localhost:3000 paints the first frame from `GET /api/v1/kpis/summary`, then follows `/ws/telemetry`: every `kpis` frame updates the summary cards, recolors the topology links by the busiest direction's utilization (idle, low under 30 %, medium under 70 %, high under 90 %, saturated) and appends a point to each port's ring buffer (120 points, about ten minutes at the default interval). Charts and the topology graph are hand-rolled SVG with no chart library; the connection badge shows the socket state, the reconnect attempt and whether the API reported its store as unavailable. The client reconnects with exponential backoff (1 s doubling to 30 s plus jitter) and pings every 15 s to keep proxies from idling the socket out.
 
 ## Local development
 
