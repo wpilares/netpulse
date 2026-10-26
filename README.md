@@ -148,9 +148,13 @@ All REST routes live under `/api/v1`; interactive docs are at `/docs`. Invalid p
 | `GET /switches/{dpid}/kpis` | Latest KPIs of every physical port of one switch, `{"dpid", "generated_at", "ports": [...]}` | |
 | `GET /kpis/summary` | `{"generated_at", "summary": {...}, "switches": [...]}`: the network summary (`ports`, `switches`, `rx_bps`, `tx_bps`, `drop_rate`, `error_rate`, `max_utilization`, `counter_resets`) plus the latest KPIs of every switch | |
 | `GET /topology` | Nodes and edges of the discovered graph | |
+| `GET /alerts` | `{"generated_at", "alerts": [...]}`: alerts raised by the collector, newest `opened_at` first | `status` `open` (default), `resolved` or `all`; `limit` 1 to 500 (default 100) |
+| `POST /alerts/{id}/ack` | The acknowledged alert; `404` when the id is unknown | Sets `acknowledged_at` once and keeps the first timestamp on repeated calls |
 | `GET /health` (no prefix) | API status and database reachability | |
 
 Every KPI point carries `dpid`, `port_no`, `computed_at`, `interval_seconds`, `rx_bps`, `tx_bps`, `rx_pps`, `tx_pps`, `drop_rate`, `error_rate`, `utilization` and `counter_reset`; rates are `null` when they cannot be computed.
+
+Every alert carries `id`, `dpid`, `port_no`, `metric` (`rx_bps`, `tx_bps`, `drop_rate` or `error_rate`), `severity` (`warning` or `critical`), `status` (`open` or `resolved`), `opened_at`, `last_seen_at`, `resolved_at`, `acknowledged_at`, `value`, `expected`, `zscore` and `updated_at`; acknowledging is a user mark and does not resolve the alert.
 
 ### Port statistics example
 
@@ -202,6 +206,7 @@ The socket pushes the same network summary as `GET /api/v1/kpis/summary`, plus p
 | `{"type": "kpis", "generated_at": "...", "summary": {...}, "switches": [{"dpid", "generated_at", "ports": [...]}]}` | server to client | Every cycle in which at least one port has two samples in the window |
 | `{"type": "heartbeat", "at": "..."}` | server to client | Every cycle in which the window holds no sample pairs yet |
 | `{"type": "store_unavailable", "at": "..."}` | server to client | Every cycle in which the database cannot be queried |
+| `{"type": "alerts", "generated_at": "...", "alerts": [...]}` | server to client | After the KPI frame of the first cycle, with every open alert; afterwards only in cycles where at least one alert was opened, refreshed, resolved or acknowledged since the previous frame, carrying just those alerts |
 | `{"type": "ping"}` / `{"type": "pong"}` | client to server / reply | Keepalive; any other client message gets `{"type": "error", "reason": "unsupported message"}` |
 
 Frames queue per client (`NETPULSE_API_LIVE_QUEUE_SIZE`, 16); a client that falls behind is disconnected with close code `1013` and reason `slow consumer`.

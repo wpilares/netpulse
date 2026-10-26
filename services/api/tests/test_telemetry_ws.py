@@ -5,13 +5,15 @@ import pytest
 from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
+from netpulse_api.alerts import Alert, AlertStatusFilter
 from netpulse_api.app import create_app
 from netpulse_api.kpis import SamplePair
 from netpulse_api.live import LiveKpiBroadcaster
-from netpulse_core import DatapathId
+from netpulse_core import AlertStatus, DatapathId
 
 MakeClient = Callable[[bool | None], TestClient]
 MakeSamplePair = Callable[[int, int], SamplePair]
+MakeAlert = Callable[[int, AlertStatus], Alert]
 
 NOW = datetime(2026, 10, 20, 12, 5, tzinfo=UTC)
 CAPACITY_BPS = 10_000_000
@@ -25,8 +27,19 @@ class StaticLatestSamplesQuery:
         return self.pairs
 
 
+class StaticAlertsQuery:
+    def __init__(self, alerts: list[Alert]) -> None:
+        self.alerts = alerts
+
+    async def fetch(self, status: AlertStatusFilter, *, limit: int) -> list[Alert]:
+        return self.alerts
+
+    async def fetch_updated_since(self, since: datetime) -> list[Alert]:
+        return []
+
+
 def _live_client(
-    pairs: list[SamplePair], *, queue_size: int = 4
+    pairs: list[SamplePair], *, queue_size: int = 4, alerts: list[Alert] | None = None
 ) -> tuple[TestClient, LiveKpiBroadcaster]:
     broadcaster = LiveKpiBroadcaster(
         StaticLatestSamplesQuery(pairs),
@@ -34,6 +47,7 @@ def _live_client(
         interval_seconds=60.0,
         queue_size=queue_size,
         clock=lambda: NOW,
+        alerts=None if alerts is None else StaticAlertsQuery(alerts),
     )
     return TestClient(create_app(database_probe=None, live_broadcaster=broadcaster)), broadcaster
 
@@ -92,6 +106,38 @@ def test_websocket_streams_heartbeats_without_samples() -> None:
         websocket.portal.call(broadcaster.tick)
 
         assert websocket.receive_json() == {"type": "heartbeat", "at": "2026-10-20T12:05:00Z"}
+
+
+def test_websocket_streams_alert_frames_after_the_kpi_frame(make_alert: MakeAlert) -> None:
+    client, broadcaster = _live_client([], alerts=[make_alert(1, "open")])
+
+    with client.websocket_connect("/ws/telemetry") as websocket:
+        websocket.receive_json()
+        websocket.portal.call(broadcaster.tick)
+
+        assert websocket.receive_json()["type"] == "heartbeat"
+        assert websocket.receive_json() == {
+            "type": "alerts",
+            "generated_at": "2026-10-20T12:05:00Z",
+            "alerts": [
+                {
+                    "id": 1,
+                    "dpid": 1,
+                    "port_no": 1,
+                    "metric": "rx_bps",
+                    "severity": "warning",
+                    "status": "open",
+                    "opened_at": "2026-10-20T11:01:00Z",
+                    "last_seen_at": "2026-10-20T11:02:00Z",
+                    "resolved_at": None,
+                    "acknowledged_at": None,
+                    "value": 1000000.0,
+                    "expected": 100000.0,
+                    "zscore": 6.5,
+                    "updated_at": "2026-10-20T11:02:00Z",
+                }
+            ],
+        }
 
 
 def test_websocket_closes_slow_consumers() -> None:
