@@ -35,9 +35,14 @@ class PortDescription:
     port_no: int
     name: str
     hw_addr: str
+    curr_speed_bps: int | None = None
 
     def as_dict(self) -> dict[str, Json]:
         return dict(asdict(self))
+
+
+def port_speed_bps(curr_speed_kbps: int) -> int | None:
+    return curr_speed_kbps * 1000 if curr_speed_kbps > 0 else None
 
 
 @dataclass(frozen=True, slots=True)

@@ -66,11 +66,24 @@ class ScriptedAlertsQuery:
         return outcome
 
 
+class PortCapacityStub:
+    def __init__(self, capacities: dict[tuple[int, int], int]) -> None:
+        self._capacities = capacities
+        self.refreshes = 0
+
+    async def refresh(self) -> None:
+        self.refreshes += 1
+
+    def capacity_for(self, dpid: int, port_no: int) -> int | None:
+        return self._capacities.get((dpid, port_no))
+
+
 def _broadcaster(
     query: ScriptedLatestSamplesQuery,
     *,
     queue_size: int = 4,
     alerts: ScriptedAlertsQuery | None = None,
+    capacity: PortCapacityStub | None = None,
 ) -> LiveKpiBroadcaster:
     return LiveKpiBroadcaster(
         query,
@@ -79,6 +92,7 @@ def _broadcaster(
         queue_size=queue_size,
         clock=lambda: NOW,
         alerts=alerts,
+        capacity=capacity,
     )
 
 
@@ -97,9 +111,7 @@ async def test_tick_broadcasts_a_kpi_frame_to_every_subscriber(
 
     (frame,) = await broadcaster.tick()
 
-    expected = network_kpi_summary(
-        latest_port_kpis(pairs, link_capacity_bps=CAPACITY_BPS), generated_at=NOW
-    )
+    expected = network_kpi_summary(latest_port_kpis(pairs, capacity=CAPACITY_BPS), generated_at=NOW)
     assert isinstance(frame, KpiFrame)
     assert frame.type == "kpis"
     assert frame.generated_at == NOW
@@ -109,6 +121,20 @@ async def test_tick_broadcasts_a_kpi_frame_to_every_subscriber(
     assert await anext(second) == frame
     assert query.requests == [None]
     assert broadcaster.subscriber_count == 2
+
+
+async def test_tick_refreshes_the_capacity_resolver_and_applies_it_per_port(
+    make_sample_pair: MakeSamplePair,
+) -> None:
+    capacity = PortCapacityStub({(1, 1): 1_000})
+    query = ScriptedLatestSamplesQuery([make_sample_pair(1, 1), make_sample_pair(1, 2)])
+    broadcaster = _broadcaster(query, capacity=capacity)
+
+    (frame,) = await broadcaster.tick()
+
+    assert isinstance(frame, KpiFrame)
+    assert [port.utilization for port in frame.switches[0].ports] == [0.8, None]
+    assert capacity.refreshes == 1
 
 
 async def test_tick_emits_a_heartbeat_without_samples() -> None:

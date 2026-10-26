@@ -5,6 +5,7 @@ from netpulse_controller.stats_store import (
     PortCounters,
     PortDescription,
     StatsStore,
+    port_speed_bps,
 )
 
 COLLECTED_AT = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
@@ -139,12 +140,14 @@ def test_topology_report_lists_switch_ports_and_directed_links() -> None:
                         "port_no": 1,
                         "name": "s1-eth1",
                         "hw_addr": "00:00:00:00:01:01",
+                        "curr_speed_bps": None,
                         "hosts": [],
                     },
                     {
                         "port_no": 2,
                         "name": "s1-eth2",
                         "hw_addr": "00:00:00:00:01:02",
+                        "curr_speed_bps": None,
                         "hosts": [],
                     },
                 ],
@@ -182,6 +185,7 @@ def test_hosts_are_listed_per_port_sorted_by_mac() -> None:
                     "port_no": 1,
                     "name": "s1-eth1",
                     "hw_addr": "00:00:00:00:01:01",
+                    "curr_speed_bps": None,
                     "hosts": [
                         {"mac": "00:00:00:00:00:01", "ipv4": ["10.0.0.1", "10.0.0.11"]},
                         {"mac": "00:00:00:00:00:02", "ipv4": ["10.0.0.2"]},
@@ -191,6 +195,7 @@ def test_hosts_are_listed_per_port_sorted_by_mac() -> None:
                     "port_no": 2,
                     "name": "s1-eth2",
                     "hw_addr": "00:00:00:00:01:02",
+                    "curr_speed_bps": None,
                     "hosts": [{"mac": "00:00:00:00:00:03", "ipv4": []}],
                 },
             ],
@@ -228,3 +233,34 @@ def test_hosts_disappear_with_their_port_switch_or_on_removal() -> None:
     store.unregister(2)
 
     assert store.hosts(2) == ()
+
+
+def test_port_speed_converts_kilobits_and_treats_zero_as_unknown() -> None:
+    assert port_speed_bps(10_000) == 10_000_000
+    assert port_speed_bps(0) is None
+    assert port_speed_bps(-1) is None
+
+
+def test_port_speed_is_reported_per_port() -> None:
+    store = StatsStore()
+    store.record_port(
+        1,
+        PortDescription(
+            port_no=1, name="s1-eth1", hw_addr="00:00:00:00:01:01", curr_speed_bps=10_000_000
+        ),
+    )
+
+    assert store.topology_report()["switches"] == [
+        {
+            "dpid": 1,
+            "ports": [
+                {
+                    "port_no": 1,
+                    "name": "s1-eth1",
+                    "hw_addr": "00:00:00:00:01:01",
+                    "curr_speed_bps": 10_000_000,
+                    "hosts": [],
+                }
+            ],
+        }
+    ]

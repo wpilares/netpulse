@@ -94,6 +94,7 @@ WEB_PORT=3100 API_PORT=8101 CONTROLLER_REST_PORT=8180 docker compose up --build
 | `COLLECTOR_REPOSITORY` | `timescale` | `log` only logs each cycle without a database |
 | `COLLECTOR_ALERT_WEBHOOK_URL` | unset | When set, the collector POSTs every alert event to this URL as JSON and keeps the URL out of its logs; unset only logs them |
 | `NETPULSE_API_LINK_CAPACITY_BPS` | `10000000` | Link capacity used for utilization by the API and the collector; unset makes utilization `null` |
+| `NETPULSE_API_LINK_CAPACITY_SOURCE` | `configured` | `openflow` makes the API use each port's OpenFlow `curr_speed` for utilization, falling back to the configured capacity for ports without one |
 | `NETWORK_LINK_BANDWIDTH_MBPS` | `10` | `TCLink` bandwidth of every emulated link; keep it equal to the API capacity |
 | `NETWORK_TRAFFIC_ENABLED` | `true` | `false` leaves the network idle after the initial `pingAll` |
 | `NETWORK_FAULT_ENABLED` | `true` | `false` turns scheduled fault injection off |
@@ -121,7 +122,7 @@ Counters are stored cumulative, exactly as OpenFlow reports them; every rate is 
 | `rx_bps`, `tx_bps` | `8 * Δbytes / Δt` | `Δt` comes from the switch's `duration_sec` when both samples have it, from collection timestamps otherwise |
 | `rx_pps`, `tx_pps` | `Δpackets / Δt` | |
 | `drop_rate`, `error_rate` | `Δdropped / Δpackets`, `Δerrors / Δpackets` | Over rx and tx together |
-| `utilization` | `max(rx_bps, tx_bps) / NETPULSE_API_LINK_CAPACITY_BPS` | Configured capacity, not OpenFlow port speed; `null` when unset |
+| `utilization` | `max(rx_bps, tx_bps) / capacity` | Capacity is `NETPULSE_API_LINK_CAPACITY_BPS` by default; with `NETPULSE_API_LINK_CAPACITY_SOURCE=openflow` the switch and summary endpoints and the WebSocket feed use the port's `curr_speed_bps` from the topology (cached for 30 s) when the switch reports one and the configured value otherwise; the history endpoint and the collector always use the configured value; `null` when no capacity applies |
 | `counter_reset` | any negative difference or `Δt <= 0` | The point keeps `counter_reset: true` and every rate `null` |
 
 | Source | Used by | Granularity |
@@ -194,13 +195,13 @@ The controller runs OS-Ken's `switches` app with link observation on: every swit
     {"id": "h:2:1", "kind": "host", "dpid": 2, "port_no": 1, "label": "10.0.0.1", "address": "10.0.0.1", "mac": "00:00:00:00:00:01"}
   ],
   "edges": [
-    {"source": "s:1", "target": "s:2", "source_port": 1, "target_port": 3},
-    {"source": "s:2", "target": "h:2:1", "source_port": 1, "target_port": null}
+    {"source": "s:1", "target": "s:2", "source_port": 1, "target_port": 3, "source_speed_bps": 10000000000, "target_speed_bps": 10000000000},
+    {"source": "s:2", "target": "h:2:1", "source_port": 1, "target_port": null, "source_speed_bps": 10000000000, "target_speed_bps": null}
   ]
 }
 ```
 
-Each inter-switch link appears once with the lower `dpid` as `source`. A switch port that is neither reserved nor the end of a link is assumed to face a host and becomes a `host` node attached to its switch. Its `label` is the first IPv4 address of the first learned host on that port (`10.0.0.3 +1` when several hosts share the port), or the port name until an ARP frame has been seen; `address` and `mac` carry the same host or `null`. Before LLDP has settled, a broadcast ARP can be learned on an inter-switch port; such entries are ignored because linked ports never become hosts, and the next ARP from the host moves it to its real edge port.
+The controller reads `curr_speed` (kbps) from each OpenFlow port description and exposes it as `curr_speed_bps` per port (`null` when the switch reports `0`); the API copies it onto each edge end as `source_speed_bps` and `target_speed_bps`. On Mininet, Open vSwitch reports the veth speed (typically 10 Gbit/s) rather than the `TCLink` shaping, which is why utilization keeps using the configured capacity unless `NETPULSE_API_LINK_CAPACITY_SOURCE=openflow`. Each inter-switch link appears once with the lower `dpid` as `source`. A switch port that is neither reserved nor the end of a link is assumed to face a host and becomes a `host` node attached to its switch. Its `label` is the first IPv4 address of the first learned host on that port (`10.0.0.3 +1` when several hosts share the port), or the port name until an ARP frame has been seen; `address` and `mac` carry the same host or `null`. Before LLDP has settled, a broadcast ARP can be learned on an inter-switch port; such entries are ignored because linked ports never become hosts, and the next ARP from the host moves it to its real edge port.
 
 ### WebSocket `/ws/telemetry`
 
@@ -273,7 +274,7 @@ Quality bar: no code comments, no `any` or untyped Python, zero lint and type er
 | v0.3 | KPIs and live dashboard: KPI domain with counter-reset handling, history, switch and summary endpoints, WebSocket feed with heartbeat and backpressure, LLDP topology, live React dashboard, shaped links with scheduled iperf3 traffic | Delivered on `feat/network-kpis`, PR pending |
 | v0.4 | Anomaly detection and alerting: baseline models over KPI series, alert rules, notifications, fault injection in the network | Next |
 
-Known follow-ups from v0.3: read `curr_speed` from OpenFlow port descriptions instead of a configured capacity, and show Mininet host names in the topology once the controller can learn them.
+The two follow-ups from v0.3 landed in v0.4: ports expose their OpenFlow `curr_speed` and can drive utilization (`NETPULSE_API_LINK_CAPACITY_SOURCE=openflow`), and hosts are learned from ARP and labelled by IPv4 address.
 
 ## License
 

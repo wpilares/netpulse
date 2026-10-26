@@ -13,7 +13,7 @@ from os_ken.controller.handler import (
 )
 from os_ken.lib import hub
 from os_ken.lib.packet import ether_types
-from os_ken.ofproto import ofproto_v1_3
+from os_ken.ofproto import ofproto_v1_3, ofproto_v1_3_parser
 from os_ken.topology import event as topology_event
 from os_ken.topology import switches as topology_switches
 
@@ -24,15 +24,23 @@ from netpulse_controller.stats_store import (
     PortCounters,
     PortDescription,
     StatsStore,
+    port_speed_bps,
 )
 
 ARP_PUNT_PRIORITY = 1
 ARP_PUNT_MAX_LEN = 128
 
 
-def _describe_port(port: topology_switches.Port) -> PortDescription:
+def _describe_port(
+    port: topology_switches.Port, ofpport: ofproto_v1_3_parser.OFPPort | None
+) -> PortDescription:
     name = port.name.decode("utf-8", "replace") if isinstance(port.name, bytes) else str(port.name)
-    return PortDescription(port_no=int(port.port_no), name=name, hw_addr=str(port.hw_addr))
+    return PortDescription(
+        port_no=int(port.port_no),
+        name=name,
+        hw_addr=str(port.hw_addr),
+        curr_speed_bps=None if ofpport is None else port_speed_bps(int(ofpport.curr_speed)),
+    )
 
 
 def _describe_host(host: topology_switches.Host) -> HostDescription:
@@ -131,7 +139,11 @@ class NetPulseMonitor(app_manager.OSKenApp):
     @set_ev_cls(topology_event.EventSwitchEnter)
     def record_switch_ports(self, event: topology_event.EventSwitchEnter) -> None:
         switch = event.switch
-        ports = tuple(_describe_port(port) for port in switch.ports if not port.is_reserved())
+        ports = tuple(
+            _describe_port(port, switch.dp.ports.get(port.port_no))
+            for port in switch.ports
+            if not port.is_reserved()
+        )
         self._store.record_ports(switch.dp.id, ports)
 
     @set_ev_cls(topology_event.EventSwitchLeave)
@@ -142,7 +154,9 @@ class NetPulseMonitor(app_manager.OSKenApp):
     def record_port(self, event: topology_event.EventPortBase) -> None:
         if event.port.is_reserved():
             return
-        self._store.record_port(event.port.dpid, _describe_port(event.port))
+        datapath = self._datapaths.get(event.port.dpid)
+        ofpport = None if datapath is None else datapath.ports.get(event.port.port_no)
+        self._store.record_port(event.port.dpid, _describe_port(event.port, ofpport))
 
     @set_ev_cls(topology_event.EventPortDelete)
     def forget_port(self, event: topology_event.EventPortDelete) -> None:

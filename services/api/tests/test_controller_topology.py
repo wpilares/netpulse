@@ -17,6 +17,7 @@ PAYLOAD = {
                     "port_no": 1,
                     "name": "s1-eth1",
                     "hw_addr": "00:00:00:00:00:01",
+                    "curr_speed_bps": 10_000_000,
                     "hosts": [{"mac": "00:00:00:00:00:11", "ipv4": ["10.0.0.1"]}],
                 }
             ],
@@ -47,6 +48,7 @@ async def test_fetch_returns_the_validated_controller_topology() -> None:
     assert topology == ControllerTopology.model_validate(PAYLOAD)
     assert topology.links[0].dst.port_no == 1
     assert topology.switches[0].ports[0].hosts[0].ipv4 == ("10.0.0.1",)
+    assert topology.switches[0].ports[0].curr_speed_bps == 10_000_000
 
 
 async def test_server_errors_are_unavailable() -> None:

@@ -12,6 +12,7 @@ from psycopg_pool import AsyncConnectionPool
 from starlette.types import Lifespan
 
 from netpulse_api.app import create_app
+from netpulse_api.capacity import ConfiguredCapacity, LinkCapacityResolver, TopologyCapacity
 from netpulse_api.controller_topology import ControllerTopologyQuery
 from netpulse_api.health import PostgresProbe
 from netpulse_api.live import LiveKpiBroadcaster
@@ -19,6 +20,9 @@ from netpulse_api.settings import ApiSettings
 from netpulse_api.timescale_alerts import TimescaleAlertStore
 from netpulse_api.timescale_kpis import TimescaleKpiHistoryQuery, TimescaleLatestSamplesQuery
 from netpulse_api.timescale_stats import ConnectionPool, TimescalePortStatsQuery
+from netpulse_api.topology import TopologyQuery
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -57,13 +61,28 @@ def build_controller_client(settings: ApiSettings) -> httpx2.AsyncClient | None:
     )
 
 
+def build_capacity(
+    settings: ApiSettings, topology_query: TopologyQuery | None
+) -> LinkCapacityResolver:
+    if settings.link_capacity_source == "openflow":
+        if topology_query is not None:
+            return TopologyCapacity(topology_query, fallback_bps=settings.link_capacity_bps)
+        logger.warning(
+            "link capacity source is openflow but no controller url is configured, "
+            "using the configured capacity"
+        )
+    return ConfiguredCapacity(settings.link_capacity_bps)
+
+
 def build_app(settings: ApiSettings) -> FastAPI:
     controller = build_controller_client(settings)
     topology_query = None if controller is None else ControllerTopologyQuery(controller)
+    capacity = build_capacity(settings, topology_query)
     if settings.database_url is None:
         return create_app(
             database_probe=None,
             link_capacity_bps=settings.link_capacity_bps,
+            capacity=capacity,
             topology_query=topology_query,
             lifespan=build_lifespan(controller, None),
         )
@@ -84,6 +103,7 @@ def build_app(settings: ApiSettings) -> FastAPI:
         interval_seconds=settings.live_interval_seconds,
         queue_size=settings.live_queue_size,
         alerts=alert_store,
+        capacity=capacity,
     )
     return create_app(
         database_probe=PostgresProbe(dsn, timeout_seconds=settings.database_timeout_seconds),
@@ -91,6 +111,7 @@ def build_app(settings: ApiSettings) -> FastAPI:
         kpi_history=TimescaleKpiHistoryQuery(pool, link_capacity_bps=settings.link_capacity_bps),
         latest_samples=TimescaleLatestSamplesQuery(pool),
         link_capacity_bps=settings.link_capacity_bps,
+        capacity=capacity,
         live_broadcaster=broadcaster,
         topology_query=topology_query,
         alerts_query=alert_store,
