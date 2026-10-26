@@ -4,6 +4,7 @@ from collections.abc import Callable
 import httpx2
 import pytest
 
+from netpulse_collector.alerts import AlertWriteError
 from netpulse_collector.controller_client import ControllerClient
 from netpulse_collector.poller import poll_once, run_polling
 from netpulse_collector.repository import PortStatsWriteError
@@ -116,3 +117,68 @@ async def test_run_polling_survives_repository_failures() -> None:
     )
 
     assert repository.attempts == 2
+
+
+class RecordingObserver:
+    def __init__(self, repository: RecordingRepository) -> None:
+        self._repository = repository
+        self.observed: list[PortStatsReport] = []
+        self.saved_before_observe: list[int] = []
+
+    async def observe(self, report: PortStatsReport) -> None:
+        self.saved_before_observe.append(len(self._repository.saved))
+        self.observed.append(report)
+
+
+async def test_poll_once_notifies_the_observer_after_saving() -> None:
+    repository = RecordingRepository()
+    observer = RecordingObserver(repository)
+
+    report = await poll_once(
+        _client(lambda _: httpx2.Response(200, json=REPORT_PAYLOAD)), repository, observer
+    )
+
+    assert observer.observed == [report]
+    assert observer.saved_before_observe == [1]
+
+
+async def test_poll_once_skips_the_observer_when_saving_fails() -> None:
+    repository = FailingOnceRepository()
+    observer = RecordingObserver(RecordingRepository())
+
+    with pytest.raises(PortStatsWriteError):
+        await poll_once(
+            _client(lambda _: httpx2.Response(200, json=REPORT_PAYLOAD)), repository, observer
+        )
+
+    assert observer.observed == []
+
+
+class FailingObserver:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def observe(self, report: PortStatsReport) -> None:
+        self.calls += 1
+        raise AlertWriteError("alerts table unavailable")
+
+
+async def test_run_polling_survives_observer_failures() -> None:
+    repository = RecordingRepository()
+    observer = FailingObserver()
+    stop = asyncio.Event()
+
+    def handler(_: httpx2.Request) -> httpx2.Response:
+        if observer.calls == 1:
+            stop.set()
+        return httpx2.Response(200, json=REPORT_PAYLOAD)
+
+    await asyncio.wait_for(
+        run_polling(
+            _client(handler), repository, interval_seconds=0.01, stop=stop, observer=observer
+        ),
+        timeout=1,
+    )
+
+    assert len(repository.saved) == 2
+    assert observer.calls == 2
