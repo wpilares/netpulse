@@ -7,6 +7,7 @@ from typing import Final, Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
+from netpulse_api.alerts import MAX_ALERT_LIMIT, Alert, AlertsQuery, AlertsUnavailableError
 from netpulse_api.kpis import (
     KpiUnavailableError,
     LatestSamplesQuery,
@@ -48,7 +49,15 @@ class StoreUnavailableFrame(BaseModel):
     at: AwareDatetime
 
 
-type LiveFrame = KpiFrame | HeartbeatFrame | StoreUnavailableFrame
+class AlertFrame(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    type: Literal["alerts"] = "alerts"
+    generated_at: AwareDatetime
+    alerts: tuple[Alert, ...]
+
+
+type LiveFrame = KpiFrame | HeartbeatFrame | StoreUnavailableFrame | AlertFrame
 
 
 def kpi_frame(summary: NetworkKpiSummary) -> KpiFrame:
@@ -101,12 +110,15 @@ class LiveKpiBroadcaster:
         interval_seconds: float,
         queue_size: int,
         clock: Clock = utc_now,
+        alerts: AlertsQuery | None = None,
     ) -> None:
         self._latest_samples = latest_samples
         self._link_capacity_bps = link_capacity_bps
         self._interval_seconds = interval_seconds
         self._queue_size = queue_size
         self._clock = clock
+        self._alerts = alerts
+        self._alert_cursor: datetime | None = None
         self._subscriptions: set[Subscription] = set()
 
     @property
@@ -121,13 +133,12 @@ class LiveKpiBroadcaster:
     def unsubscribe(self, subscription: Subscription) -> None:
         self._subscriptions.discard(subscription)
 
-    async def tick(self) -> LiveFrame:
-        frame = await self._next_frame()
-        for subscription in list(self._subscriptions):
-            if not subscription.publish(frame):
-                self._subscriptions.discard(subscription)
-                logger.warning("dropped slow live telemetry subscriber")
-        return frame
+    async def tick(self) -> tuple[LiveFrame, ...]:
+        published: list[LiveFrame] = [self._publish(await self._next_frame())]
+        alert_frame = await self._next_alert_frame()
+        if alert_frame is not None:
+            published.append(self._publish(alert_frame))
+        return tuple(published)
 
     async def run(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
@@ -148,3 +159,28 @@ class LiveKpiBroadcaster:
             return HeartbeatFrame(at=generated_at)
         kpis = latest_port_kpis(pairs, link_capacity_bps=self._link_capacity_bps)
         return kpi_frame(network_kpi_summary(kpis, generated_at=generated_at))
+
+    async def _next_alert_frame(self) -> AlertFrame | None:
+        if self._alerts is None:
+            return None
+        try:
+            alerts = await self._changed_alerts(self._alerts)
+        except AlertsUnavailableError:
+            logger.warning("alert query failed, skipping alert frame", exc_info=True)
+            return None
+        if not alerts:
+            return None
+        self._alert_cursor = max(alert.updated_at for alert in alerts)
+        return AlertFrame(generated_at=self._clock(), alerts=tuple(alerts))
+
+    async def _changed_alerts(self, alerts: AlertsQuery) -> list[Alert]:
+        if self._alert_cursor is None:
+            return await alerts.fetch("open", limit=MAX_ALERT_LIMIT)
+        return await alerts.fetch_updated_since(self._alert_cursor)
+
+    def _publish(self, frame: LiveFrame) -> LiveFrame:
+        for subscription in list(self._subscriptions):
+            if not subscription.publish(frame):
+                self._subscriptions.discard(subscription)
+                logger.warning("dropped slow live telemetry subscriber")
+        return frame
