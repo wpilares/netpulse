@@ -5,6 +5,7 @@ import pytest
 from netpulse_network.traffic import (
     TrafficFlow,
     TrafficRound,
+    disable_tx_offload_command,
     iperf_client_command,
     iperf_server_command,
     plan_rounds,
@@ -123,16 +124,22 @@ def test_server_command_runs_iperf3_as_a_daemon() -> None:
     assert iperf_server_command() == ("iperf3", "-s", "-D")
 
 
-def test_client_command_sends_udp_at_the_flow_rate() -> None:
+def test_client_command_sends_udp_at_the_flow_rate_and_gives_up_on_a_dead_server() -> None:
     flow = TrafficFlow(client="h1", server="h2", duration_seconds=10, bandwidth_mbps=5)
 
     assert iperf_client_command("10.0.0.2", flow) == (
         "iperf3",
         "-c",
         "10.0.0.2",
+        "--connect-timeout",
+        "3000",
         "-u",
         "-b",
         "5M",
         "-t",
         "10",
     )
+
+
+def test_tx_offload_command_turns_checksum_offload_off_for_the_interface() -> None:
+    assert disable_tx_offload_command("h1-eth0") == ("ethtool", "-K", "h1-eth0", "tx", "off")

@@ -2,6 +2,7 @@ FROM debian:trixie-slim
 
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends \
+        ethtool \
         iperf3 \
         iproute2 \
         iputils-ping \
