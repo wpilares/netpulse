@@ -137,6 +137,10 @@ The `network` container runs Mininet and Open vSwitch, which need Linux network 
 
 The full stack, including the privileged network container, has been verified with Docker Desktop on macOS (Apple silicon): all hosts reach each other and the collector receives counters from every switch.
 
+### Traffic generation
+
+Every Mininet link is a `TCLink` shaped to `NETWORK_LINK_BANDWIDTH_MBPS` (10 Mbit/s by default, the same capacity the API uses for utilization). After the initial `pingAll`, the network starts an `iperf3` server on every host and schedules UDP flows between host pairs: each round pairs the hosts round-robin so every host talks to every other one over time, each flow sends at a rate that drifts deterministically between `NETPULSE_NETWORK_TRAFFIC_MIN_MBPS` and `NETPULSE_NETWORK_TRAFFIC_MAX_MBPS` (1 to 8 Mbit/s by default) for `NETPULSE_NETWORK_TRAFFIC_DURATION_SECONDS` (10 s), and a new round starts every `NETPULSE_NETWORK_TRAFFIC_ROUND_SECONDS` (15 s). UDP keeps the requested rate even when a link is saturated, so drops show up in the port counters instead of TCP backing off. Set `NETWORK_TRAFFIC_ENABLED=false` to leave the network idle; `NETPULSE_NETWORK_TRAFFIC_SEED` changes the schedule.
+
 ### Dashboard
 
 The web app at http://localhost:3000 paints the first frame from `GET /api/v1/kpis/summary`, then follows `/ws/telemetry`: every `kpis` frame updates the summary cards, recolors the topology links by the busiest direction's utilization (idle, low under 30 %, medium under 70 %, high under 90 %, saturated) and appends a point to each port's ring buffer (120 points, about ten minutes at the default interval). Charts and the topology graph are hand-rolled SVG with no chart library; the connection badge shows the socket state, the reconnect attempt and whether the API reported its store as unavailable. The client reconnects with exponential backoff (1 s doubling to 30 s plus jitter) and pings every 15 s to keep proxies from idling the socket out.

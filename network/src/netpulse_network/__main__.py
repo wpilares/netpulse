@@ -17,7 +17,12 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
-    run(build_tree(depth=config.depth, fanout=config.fanout), config, stop)
+    spec = build_tree(
+        depth=config.depth,
+        fanout=config.fanout,
+        link_bandwidth_mbps=config.link_bandwidth_mbps,
+    )
+    run(spec, config, stop)
 
 
 if __name__ == "__main__":
