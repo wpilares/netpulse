@@ -82,3 +82,18 @@ def test_controller_timeout_must_be_positive(monkeypatch: pytest.MonkeyPatch) ->
 
     with pytest.raises(ValidationError):
         ApiSettings()
+
+
+def test_link_capacity_source_defaults_to_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NETPULSE_API_LINK_CAPACITY_SOURCE", raising=False)
+
+    assert ApiSettings().link_capacity_source == "configured"
+
+
+def test_link_capacity_source_accepts_openflow_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NETPULSE_API_LINK_CAPACITY_SOURCE", "openflow")
+    assert ApiSettings().link_capacity_source == "openflow"
+
+    monkeypatch.setenv("NETPULSE_API_LINK_CAPACITY_SOURCE", "guess")
+    with pytest.raises(ValidationError):
+        ApiSettings()

@@ -3,6 +3,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Path, Query, status
 
+from netpulse_api.capacity import ConfiguredCapacity, LinkCapacityResolver
 from netpulse_api.kpis import (
     KpiHistoryQuery,
     KpiRange,
@@ -24,8 +25,10 @@ def build_kpis_router(
     latest: LatestSamplesQuery | None,
     *,
     link_capacity_bps: int | None,
+    capacity: LinkCapacityResolver | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/v1", tags=["kpis"])
+    resolver = ConfiguredCapacity(link_capacity_bps) if capacity is None else capacity
 
     async def latest_kpis(dpid: DatapathId | None) -> list[PortKpis]:
         if latest is None:
@@ -36,7 +39,8 @@ def build_kpis_router(
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE, "storage is unavailable"
             ) from error
-        return latest_port_kpis(pairs, link_capacity_bps=link_capacity_bps)
+        await resolver.refresh()
+        return latest_port_kpis(pairs, capacity=resolver)
 
     @router.get("/switches/{dpid}/ports/{port_no}/kpis")
     async def port_kpi_history(

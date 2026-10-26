@@ -25,6 +25,7 @@ class ControllerPort(BaseModel):
     port_no: PortNumber
     name: str
     hw_addr: str
+    curr_speed_bps: int | None = None
     hosts: tuple[ControllerHost, ...] = ()
 
 
@@ -79,6 +80,8 @@ class TopologyEdge(BaseModel):
     target: str
     source_port: PortNumber | None
     target_port: PortNumber | None
+    source_speed_bps: int | None = None
+    target_speed_bps: int | None = None
 
 
 class Topology(BaseModel):
@@ -99,6 +102,15 @@ def switch_node_id(dpid: int) -> str:
 
 def host_node_id(dpid: int, port_no: int) -> str:
     return f"h:{dpid}:{port_no}"
+
+
+def port_speeds(controller: ControllerTopology) -> dict[PortRef, int]:
+    return {
+        (switch.dpid, port.port_no): port.curr_speed_bps
+        for switch in controller.switches
+        for port in switch.ports
+        if port.curr_speed_bps
+    }
 
 
 def _switch_pairs(controller: ControllerTopology, known: set[int]) -> set[SwitchPair]:
@@ -140,6 +152,7 @@ def build_topology(controller: ControllerTopology, *, generated_at: datetime) ->
     switches = sorted(controller.switches, key=lambda switch: switch.dpid)
     pairs = _switch_pairs(controller, {switch.dpid for switch in switches})
     linked: set[PortRef] = {end for pair in pairs for end in pair}
+    speeds = port_speeds(controller)
 
     nodes: list[TopologyNode] = [
         TopologyNode(
@@ -157,6 +170,8 @@ def build_topology(controller: ControllerTopology, *, generated_at: datetime) ->
             target=switch_node_id(dst_dpid),
             source_port=src_port,
             target_port=dst_port,
+            source_speed_bps=speeds.get((src_dpid, src_port)),
+            target_speed_bps=speeds.get((dst_dpid, dst_port)),
         )
         for (src_dpid, src_port), (dst_dpid, dst_port) in sorted(pairs)
     ]
@@ -172,6 +187,8 @@ def build_topology(controller: ControllerTopology, *, generated_at: datetime) ->
                     target=host.id,
                     source_port=port.port_no,
                     target_port=None,
+                    source_speed_bps=speeds.get((switch.dpid, port.port_no)),
+                    target_speed_bps=None,
                 )
             )
     return Topology(generated_at=generated_at, nodes=tuple(nodes), edges=tuple(edges))

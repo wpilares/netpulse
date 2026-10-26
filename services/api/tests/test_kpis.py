@@ -114,11 +114,24 @@ class UnavailableLatestSamplesQuery:
         raise KpiUnavailableError("database down")
 
 
+class PortCapacityStub:
+    def __init__(self, capacities: dict[tuple[int, int], int]) -> None:
+        self._capacities = capacities
+        self.refreshes = 0
+
+    async def refresh(self) -> None:
+        self.refreshes += 1
+
+    def capacity_for(self, dpid: int, port_no: int) -> int | None:
+        return self._capacities.get((dpid, port_no))
+
+
 def _client(
     history: KpiHistoryQuery | None = None,
     latest: LatestSamplesQuery | None = None,
     *,
     link_capacity_bps: int | None = CAPACITY_BPS,
+    capacity: PortCapacityStub | None = None,
 ) -> TestClient:
     return TestClient(
         create_app(
@@ -126,6 +139,7 @@ def _client(
             kpi_history=history,
             latest_samples=latest,
             link_capacity_bps=link_capacity_bps,
+            capacity=capacity,
         )
     )
 
@@ -261,6 +275,16 @@ def test_switch_kpis_without_capacity_has_no_utilization() -> None:
     assert port["utilization"] is None
 
 
+def test_switch_kpis_use_the_capacity_resolver_per_port() -> None:
+    latest = InMemoryLatestSamplesQuery([_pair(1, 1), _pair(1, 2)])
+    capacity = PortCapacityStub({(1, 1): 1_000})
+
+    response = _client(latest=latest, capacity=capacity).get(SWITCH_URL)
+
+    assert [port["utilization"] for port in response.json()["ports"]] == [0.8, None]
+    assert capacity.refreshes == 1
+
+
 def test_switch_without_samples_has_no_ports() -> None:
     response = _client(latest=InMemoryLatestSamplesQuery([_pair(2, 1)])).get(SWITCH_URL)
 
@@ -323,7 +347,7 @@ def test_reports_unavailable_when_no_database_is_configured(url: str) -> None:
 def test_latest_port_kpis_keeps_pair_order_and_core_semantics() -> None:
     pairs = [_pair(1, 2), _pair(1, 1, reset=True)]
 
-    kpis = latest_port_kpis(pairs, link_capacity_bps=CAPACITY_BPS)
+    kpis = latest_port_kpis(pairs, capacity=CAPACITY_BPS)
 
     assert kpis == [
         compute_port_kpis(*pairs[0], link_capacity_bps=CAPACITY_BPS),

@@ -187,10 +187,53 @@ def test_several_hosts_on_one_port_show_the_first_address_and_a_count() -> None:
     assert topology.nodes[1].mac == "00:00:00:00:00:13"
 
 
-def test_controller_ports_default_to_no_hosts() -> None:
+def test_controller_ports_default_to_no_hosts_and_unknown_speed() -> None:
     port = ControllerPort(port_no=1, name="s1-eth1", hw_addr="00:00:00:00:00:01")
 
     assert port.hosts == ()
+    assert port.curr_speed_bps is None
+
+
+def _speedy_port(port_no: int, curr_speed_bps: int | None) -> ControllerPort:
+    return ControllerPort(
+        port_no=port_no,
+        name=f"eth{port_no}",
+        hw_addr="00:00:00:00:00:01",
+        curr_speed_bps=curr_speed_bps,
+    )
+
+
+def test_edges_carry_the_openflow_speed_of_each_end() -> None:
+    controller = ControllerTopology(
+        switches=(
+            ControllerSwitch(
+                dpid=1, ports=(_speedy_port(1, 10_000_000), _speedy_port(2, 1_000_000_000))
+            ),
+            ControllerSwitch(dpid=2, ports=(_speedy_port(1, None),)),
+        ),
+        links=(_link(2, 1, 1, 1),),
+    )
+
+    topology = build_topology(controller, generated_at=GENERATED_AT)
+
+    assert topology.edges == (
+        TopologyEdge(
+            source="s:1",
+            target="s:2",
+            source_port=1,
+            target_port=1,
+            source_speed_bps=10_000_000,
+            target_speed_bps=None,
+        ),
+        TopologyEdge(
+            source="s:1",
+            target="h:1:2",
+            source_port=2,
+            target_port=None,
+            source_speed_bps=1_000_000_000,
+            target_speed_bps=None,
+        ),
+    )
 
 
 class StubTopologyQuery:
@@ -225,6 +268,8 @@ def test_topology_endpoint_returns_nodes_and_edges() -> None:
         "target": "s:2",
         "source_port": 1,
         "target_port": 3,
+        "source_speed_bps": None,
+        "target_speed_bps": None,
     }
     assert len(payload["nodes"]) == 7
     assert len(payload["edges"]) == 6

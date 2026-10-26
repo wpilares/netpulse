@@ -8,6 +8,7 @@ from typing import Final, Literal, Self
 from pydantic import AwareDatetime, BaseModel, ConfigDict
 
 from netpulse_api.alerts import MAX_ALERT_LIMIT, Alert, AlertsQuery, AlertsUnavailableError
+from netpulse_api.capacity import ConfiguredCapacity, LinkCapacityResolver
 from netpulse_api.kpis import (
     KpiUnavailableError,
     LatestSamplesQuery,
@@ -111,9 +112,10 @@ class LiveKpiBroadcaster:
         queue_size: int,
         clock: Clock = utc_now,
         alerts: AlertsQuery | None = None,
+        capacity: LinkCapacityResolver | None = None,
     ) -> None:
         self._latest_samples = latest_samples
-        self._link_capacity_bps = link_capacity_bps
+        self._capacity = ConfiguredCapacity(link_capacity_bps) if capacity is None else capacity
         self._interval_seconds = interval_seconds
         self._queue_size = queue_size
         self._clock = clock
@@ -157,7 +159,8 @@ class LiveKpiBroadcaster:
         generated_at = self._clock()
         if not pairs:
             return HeartbeatFrame(at=generated_at)
-        kpis = latest_port_kpis(pairs, link_capacity_bps=self._link_capacity_bps)
+        await self._capacity.refresh()
+        kpis = latest_port_kpis(pairs, capacity=self._capacity)
         return kpi_frame(network_kpi_summary(kpis, generated_at=generated_at))
 
     async def _next_alert_frame(self) -> AlertFrame | None:

@@ -5,6 +5,7 @@ from typing import Annotated, Final, Protocol, Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from netpulse_api.capacity import LinkCapacity, resolve_capacity
 from netpulse_core import (
     DatapathId,
     NetworkSummary,
@@ -86,11 +87,14 @@ class NetworkKpiSummary(BaseModel):
     switches: tuple[SwitchKpis, ...]
 
 
-def latest_port_kpis(
-    pairs: Iterable[SamplePair], *, link_capacity_bps: int | None
-) -> list[PortKpis]:
+def latest_port_kpis(pairs: Iterable[SamplePair], *, capacity: LinkCapacity) -> list[PortKpis]:
+    resolver = resolve_capacity(capacity)
     return [
-        compute_port_kpis(previous, current, link_capacity_bps=link_capacity_bps)
+        compute_port_kpis(
+            previous,
+            current,
+            link_capacity_bps=resolver.capacity_for(current.dpid, current.stats.port_no),
+        )
         for previous, current in pairs
     ]
 
