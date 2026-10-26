@@ -96,6 +96,9 @@ WEB_PORT=3100 API_PORT=8101 CONTROLLER_REST_PORT=8180 docker compose up --build
 | `NETPULSE_API_LINK_CAPACITY_BPS` | `10000000` | Link capacity used for utilization by the API and the collector; unset makes utilization `null` |
 | `NETWORK_LINK_BANDWIDTH_MBPS` | `10` | `TCLink` bandwidth of every emulated link; keep it equal to the API capacity |
 | `NETWORK_TRAFFIC_ENABLED` | `true` | `false` leaves the network idle after the initial `pingAll` |
+| `NETWORK_FAULT_ENABLED` | `true` | `false` turns scheduled fault injection off |
+| `NETWORK_FAULT_PERIOD_SECONDS`, `NETWORK_FAULT_DURATION_SECONDS` | `90`, `30` | Time between faults and how long each one lasts |
+| `NETWORK_FAULT_LOSS_PERCENT` | `20` | Packet loss applied by `loss` faults, 1 to 100 |
 | `NETWORK_OVS_DATAPATH` | `user` | `kernel` on a Linux host with the `openvswitch` module loaded, for better throughput |
 | `NETWORK_TREE_DEPTH`, `NETWORK_TREE_FANOUT` | `2`, `2` | Shape of the Mininet tree topology |
 
@@ -104,6 +107,8 @@ WEB_PORT=3100 API_PORT=8101 CONTROLLER_REST_PORT=8180 docker compose up --build
 The `network` container runs Mininet and Open vSwitch, which need Linux network namespaces, so it runs **privileged**. On Linux it uses the host kernel directly; on macOS and Windows it runs inside Docker Desktop's Linux VM. The default userspace datapath needs no kernel module, but it forwards packets whose checksums the kernel left for hardware offload to compute, so hosts would drop every TCP segment with `InCsumErrors`; the network disables TX checksum offload (`ethtool -K <intf> tx off`) on every host and switch interface right after the switches start.
 
 Every Mininet link is a `TCLink` shaped to `NETWORK_LINK_BANDWIDTH_MBPS`. After the initial `pingAll`, the network starts an `iperf3` server on every host and schedules UDP flows between host pairs: each round pairs the hosts round-robin so every host talks to every other one over time, each flow sends at a rate that drifts deterministically between `NETPULSE_NETWORK_TRAFFIC_MIN_MBPS` and `NETPULSE_NETWORK_TRAFFIC_MAX_MBPS` (1 to 8 Mbit/s by default) for `NETPULSE_NETWORK_TRAFFIC_DURATION_SECONDS` (10 s), and a new round starts every `NETPULSE_NETWORK_TRAFFIC_ROUND_SECONDS` (15 s). UDP keeps the requested rate even when a link is saturated, so drops show up in the port counters instead of TCP backing off. `NETPULSE_NETWORK_TRAFFIC_SEED` changes the schedule.
+
+**Fault injection.** So the anomaly detector has something to find, the network also injects one fault every `NETPULSE_NETWORK_FAULT_PERIOD_SECONDS` (90 s, which leaves the baselines time to warm up) and clears it after `NETPULSE_NETWORK_FAULT_DURATION_SECONDS` (30 s). Faults alternate between `loss`, which adds `NETPULSE_NETWORK_FAULT_LOSS_PERCENT` (20 %) `netem` packet loss on both ends of a link while keeping its bandwidth shaping, and `link down`, which takes both interfaces of a link down. The schedule is deterministic (`NETPULSE_NETWORK_FAULT_SEED`): it visits every host-facing link first, then the switch-to-switch links, and starts over. Traffic rounds keep their own cadence during a fault, so a lossy link shows as drops and a downed link as a throughput collapse on the affected ports. The container logs `*** Fault: ...` and `*** Fault cleared`, clears any active fault on shutdown, and `NETWORK_FAULT_ENABLED=false` disables injection.
 
 The full stack, including the privileged network container, has been verified with Docker Desktop on macOS (Apple silicon).
 

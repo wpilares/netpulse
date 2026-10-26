@@ -1,14 +1,16 @@
 import socket
 import threading
+import time
 from collections.abc import Iterator
 
-from mininet.link import TCLink
+from mininet.link import TCIntf, TCLink
 from mininet.log import info, setLogLevel
 from mininet.net import Mininet
 from mininet.node import OVSSwitch, RemoteController
 
 from netpulse_network.config import NetworkConfig
-from netpulse_network.topology import TopologySpec
+from netpulse_network.faults import Fault, Schedule, describe_fault, plan_faults
+from netpulse_network.topology import Link, TopologySpec
 from netpulse_network.traffic import (
     TrafficRound,
     disable_tx_offload_command,
@@ -63,6 +65,20 @@ def _rounds(spec: TopologySpec, config: NetworkConfig) -> Iterator[TrafficRound]
         generation += 1
 
 
+def _faults(spec: TopologySpec, config: NetworkConfig) -> Iterator[Fault]:
+    generation = 0
+    while True:
+        yield from plan_faults(
+            spec.links,
+            hosts=spec.hosts,
+            count=len(spec.links),
+            duration_seconds=config.fault_duration_seconds,
+            loss_percent=config.fault_loss_percent,
+            seed=config.fault_seed + generation,
+        )
+        generation += 1
+
+
 def _shell(command: tuple[str, ...]) -> str:
     return " ".join(command)
 
@@ -97,17 +113,78 @@ def _launch_round(network: Mininet, traffic_round: TrafficRound) -> None:
         )
 
 
-def _generate_traffic(
+def _link_interfaces(network: Mininet, link: Link) -> list[TCIntf]:
+    source, target = network.get(link.source), network.get(link.target)
+    return [
+        interface
+        for mininet_link in network.linksBetween(source, target)
+        for interface in (mininet_link.intf1, mininet_link.intf2)
+    ]
+
+
+def _set_link_loss(network: Mininet, spec: TopologySpec, link: Link, loss_percent: int) -> None:
+    for interface in _link_interfaces(network, link):
+        interface.config(bw=spec.link_bandwidth_mbps, loss=loss_percent, txo=False)
+    info("\n")
+
+
+def _apply_fault(network: Mininet, spec: TopologySpec, fault: Fault) -> None:
+    if fault.kind == "loss":
+        _set_link_loss(network, spec, fault.link, fault.loss_percent)
+    else:
+        network.configLinkStatus(fault.link.source, fault.link.target, "down")
+    info(f"*** Fault: {describe_fault(fault)}\n")
+
+
+def _clear_fault(network: Mininet, spec: TopologySpec, fault: Fault) -> None:
+    if fault.kind == "loss":
+        _set_link_loss(network, spec, fault.link, 0)
+    else:
+        network.configLinkStatus(fault.link.source, fault.link.target, "up")
+    info("*** Fault cleared\n")
+
+
+def _run_schedule(
     network: Mininet, spec: TopologySpec, config: NetworkConfig, stop: threading.Event
 ) -> None:
-    _start_servers(network, spec)
     rounds = _rounds(spec, config)
+    faults = _faults(spec, config)
+    inject_faults = config.fault_enabled and bool(spec.links)
+    schedule = Schedule.start(
+        time.monotonic(),
+        traffic=config.traffic_enabled,
+        first_fault_in=config.fault_period_seconds if inject_faults else None,
+    )
+    active_fault: Fault | None = None
+    if config.traffic_enabled:
+        _start_servers(network, spec)
     try:
         while not stop.is_set():
-            _launch_round(network, next(rounds))
-            stop.wait(config.traffic_round_seconds)
+            due = schedule.next_event()
+            if due is None:
+                stop.wait()
+                break
+            event, at = due
+            if stop.wait(max(0.0, at - time.monotonic())):
+                break
+            now = time.monotonic()
+            if event == "traffic":
+                _launch_round(network, next(rounds))
+                schedule = schedule.traffic_launched(now, config.traffic_round_seconds)
+            elif event == "fault_start":
+                active_fault = next(faults)
+                _apply_fault(network, spec, active_fault)
+                schedule = schedule.fault_applied(now, active_fault.duration_seconds)
+            else:
+                if active_fault is not None:
+                    _clear_fault(network, spec, active_fault)
+                active_fault = None
+                schedule = schedule.fault_cleared(now, config.fault_period_seconds)
     finally:
-        _stop_traffic(network, spec)
+        if active_fault is not None:
+            _clear_fault(network, spec, active_fault)
+        if config.traffic_enabled:
+            _stop_traffic(network, spec)
 
 
 def run(spec: TopologySpec, config: NetworkConfig, stop: threading.Event) -> None:
@@ -120,9 +197,6 @@ def run(spec: TopologySpec, config: NetworkConfig, stop: threading.Event) -> Non
         network.waitConnected(timeout=30)
         loss = network.pingAll(timeout="1")
         info(f"*** Initial reachability check: {loss}% packet loss\n")
-        if config.traffic_enabled:
-            _generate_traffic(network, spec, config, stop)
-        else:
-            stop.wait()
+        _run_schedule(network, spec, config, stop)
     finally:
         network.stop()
