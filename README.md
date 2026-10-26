@@ -73,7 +73,7 @@ Migrations live in [`db/migrations`](db/migrations) and are applied by the `migr
 | `port_stats` | hypertable, 1-day chunks, compressed after 1 day | `(dpid, port_no, time)` | One row per port per poll: cumulative rx/tx packets, bytes, dropped, errors and `duration_sec` | 7 days |
 | `port_stats_1m` | continuous aggregate, refreshed every minute, real-time | `(dpid, port_no, bucket)` | Last counter values in each 1-minute bucket and the number of `samples` | 90 days |
 
-Counters are cumulative, exactly as OpenFlow reports them; KPIs (throughput, packet rate, drop and error rates, utilization) are derived in the core domain from consecutive samples and served under `/api/v1/switches/{dpid}/kpis`, `/api/v1/switches/{dpid}/ports/{port_no}/kpis` and `/api/v1/kpis/summary` ([ADR 0007](docs/adr/0007-kpi-computation.md)). A counter the switch reports as unsupported (`2^64 - 1`) is stored as `NULL`. Writes are idempotent, so a retried poll cycle never duplicates rows.
+Counters are cumulative, exactly as OpenFlow reports them; KPIs (throughput, packet rate, drop and error rates, utilization) are derived in the core domain from consecutive samples and served under `/api/v1/switches/{dpid}/kpis`, `/api/v1/switches/{dpid}/ports/{port_no}/kpis` and `/api/v1/kpis/summary` ([ADR 0007](docs/adr/0007-kpi-computation.md)). A counter the switch reports as unsupported (`2^64 - 1`) is stored as `NULL`. Writes are idempotent, so a retried poll cycle never duplicates rows. Per-switch KPIs, the summary and live frames cover physical ports only: OpenFlow reserved ports such as `LOCAL` (`port_no >= 0xffffff00`) are stored but left out, so the port count matches the topology.
 
 ## Querying port statistics
 

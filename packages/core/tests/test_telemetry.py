@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
+from netpulse_core import RESERVED_PORT_START, is_reserved_port
 from netpulse_core.telemetry import PortStats, PortStatsReport
 
 
@@ -77,3 +78,23 @@ def test_port_stats_are_immutable(field: str) -> None:
 
     with pytest.raises(ValidationError):
         setattr(stats, field, 99)
+
+
+def test_reserved_ports_start_at_the_openflow_maximum_physical_port() -> None:
+    assert RESERVED_PORT_START == 0xFFFFFF00
+
+
+@pytest.mark.parametrize(
+    ("port_no", "expected"),
+    [
+        (0, False),
+        (1, False),
+        (0xFFFFFEFF, False),
+        (0xFFFFFF00, True),
+        (0xFFFFFFF8, True),
+        (0xFFFFFFFE, True),
+        (0xFFFFFFFF, True),
+    ],
+)
+def test_reserved_port_detection(port_no: int, expected: bool) -> None:
+    assert is_reserved_port(port_no) is expected

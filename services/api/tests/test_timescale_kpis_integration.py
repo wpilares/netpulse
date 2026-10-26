@@ -20,6 +20,7 @@ UP_MARKER = "-- migrate:up"
 DOWN_MARKER = "-- migrate:down"
 CAPACITY_BPS = 10_000_000
 POLL = timedelta(seconds=15)
+LOCAL_PORT = 0xFFFFFFFE
 
 pytestmark = [
     pytest.mark.integration,
@@ -114,6 +115,8 @@ async def _seed(pool: ConnectionPool, start: datetime) -> None:
         _row(start, 7, 9, 0, since_reset=0),
         _row(start, 8, 1, 0, since_reset=0),
         _row(start + POLL, 8, 1, 1, since_reset=2),
+        _row(start, 8, LOCAL_PORT, 0, since_reset=0),
+        _row(start + POLL, 8, LOCAL_PORT, 1, since_reset=1),
     ]
     async with pool.connection() as connection:
         await connection.set_autocommit(True)
@@ -208,6 +211,17 @@ async def test_latest_filters_by_switch(pool: ConnectionPool, start: datetime) -
 
     assert [current.stats.port_no for _, current in switch_pairs] == [2, 3]
     assert unknown == []
+
+
+async def test_latest_excludes_the_openflow_local_port(
+    pool: ConnectionPool, start: datetime
+) -> None:
+    query = TimescaleLatestSamplesQuery(pool)
+
+    switch_pairs = await query.fetch(8)
+
+    assert [current.stats.port_no for _, current in switch_pairs] == [1]
+    assert all(current.stats.port_no < 0xFFFFFF00 for _, current in await query.fetch(None))
 
 
 async def test_latest_honours_the_lookback_window(pool: ConnectionPool, start: datetime) -> None:
