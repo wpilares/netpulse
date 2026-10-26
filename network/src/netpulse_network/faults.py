@@ -2,7 +2,7 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Literal, Self
 
-from netpulse_network.topology import Link
+from netpulse_network.topology import Link, TopologySpec
 
 FaultKind = Literal["loss", "host_down"]
 ScheduledEvent = Literal["traffic", "fault_start", "fault_end"]
@@ -129,6 +129,48 @@ def plan_faults(
             )
         )
     return tuple(planned)
+
+
+def _hosts_behind(switch: str, spec: TopologySpec) -> list[str]:
+    hosts = set(spec.hosts)
+    return [
+        host
+        for link in spec.links
+        for host in (link.source, link.target)
+        if host in hosts and switch in (link.source, link.target)
+    ]
+
+
+def choose_probe_host(fault: Fault, spec: TopologySpec) -> str:
+    siblings = [host for host in _hosts_behind(fault.switch, spec) if host != fault.host]
+    others = [host for host in spec.hosts if host != fault.host]
+    candidates = siblings or others
+    if not candidates:
+        raise ValueError(f"no other host can probe {fault.host}")
+    return candidates[0]
+
+
+def probe_commands(
+    *, target_ip: str, target_mac: str, interface: str, duration_seconds: int
+) -> tuple[tuple[str, ...], ...]:
+    pin_neighbour = (
+        "ip",
+        "neigh",
+        "replace",
+        target_ip,
+        "lladdr",
+        target_mac,
+        "dev",
+        interface,
+        "nud",
+        "permanent",
+    )
+    flood = ("ping", "-f", "-q", "-w", str(duration_seconds), "-s", "1000", target_ip)
+    return (pin_neighbour, flood)
+
+
+def probe_cleanup_commands(*, target_ip: str, interface: str) -> tuple[str, ...]:
+    return ("ip", "neigh", "del", target_ip, "dev", interface)
 
 
 def describe_fault(fault: Fault) -> str:

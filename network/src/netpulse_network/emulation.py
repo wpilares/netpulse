@@ -10,7 +10,15 @@ from mininet.net import Mininet
 from mininet.node import OVSSwitch, RemoteController
 
 from netpulse_network.config import NetworkConfig
-from netpulse_network.faults import Fault, Schedule, describe_fault, plan_faults
+from netpulse_network.faults import (
+    Fault,
+    Schedule,
+    choose_probe_host,
+    describe_fault,
+    plan_faults,
+    probe_cleanup_commands,
+    probe_commands,
+)
 from netpulse_network.topology import Link, TopologySpec
 from netpulse_network.traffic import (
     TrafficRound,
@@ -140,6 +148,27 @@ def _switch_port_facing(network: Mininet, host: str) -> str:
     return str(peer.name)
 
 
+def _start_probe(network: Mininet, spec: TopologySpec, fault: Fault, host: str) -> None:
+    probe = network.get(choose_probe_host(fault, spec))
+    target = network.get(host)
+    target_ip = str(target.IP())
+    pin_neighbour, flood = probe_commands(
+        target_ip=target_ip,
+        target_mac=str(target.MAC()),
+        interface=str(probe.intf().name),
+        duration_seconds=fault.duration_seconds,
+    )
+    probe.cmd(_shell(pin_neighbour))
+    probe.cmd(f"{_shell(flood)} > /dev/null 2>&1 &")
+    info(f"*** Probe: {probe.name} -> {target_ip} flood for {fault.duration_seconds}s\n")
+
+
+def _stop_probe(network: Mininet, spec: TopologySpec, fault: Fault, host: str) -> None:
+    probe = network.get(choose_probe_host(fault, spec))
+    target_ip = str(network.get(host).IP())
+    probe.cmd(_shell(probe_cleanup_commands(target_ip=target_ip, interface=str(probe.intf().name))))
+
+
 def _apply_fault(network: Mininet, spec: TopologySpec, fault: Fault) -> None:
     if fault.kind == "loss":
         _set_link_loss(network, spec, fault.link, fault.loss_percent)
@@ -148,12 +177,14 @@ def _apply_fault(network: Mininet, spec: TopologySpec, fault: Fault) -> None:
         _set_host_interface(network, fault.host, "down")
         port = _switch_port_facing(network, fault.host)
         info(f"*** Fault: {describe_fault(fault)} ({port} counts the drops)\n")
+        _start_probe(network, spec, fault, fault.host)
 
 
 def _clear_fault(network: Mininet, spec: TopologySpec, fault: Fault) -> None:
     if fault.kind == "loss":
         _set_link_loss(network, spec, fault.link, 0)
     elif fault.host is not None:
+        _stop_probe(network, spec, fault, fault.host)
         _set_host_interface(network, fault.host, "up")
     info("*** Fault cleared\n")
 
