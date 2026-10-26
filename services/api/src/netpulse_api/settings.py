@@ -11,3 +11,4 @@ class ApiSettings(ServiceSettings, env_prefix="NETPULSE_API_"):
     database_url: PostgresDsn | None = None
     database_timeout_seconds: Annotated[float, Field(gt=0)] = 2.0
     database_pool_size: Annotated[int, Field(ge=1)] = 4
+    link_capacity_bps: Annotated[int, Field(gt=0)] | None = 10_000_000
