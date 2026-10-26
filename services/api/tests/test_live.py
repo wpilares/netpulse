@@ -15,8 +15,10 @@ from netpulse_api.live import (
     AlertFrame,
     HeartbeatFrame,
     KpiFrame,
+    LiveFrame,
     LiveKpiBroadcaster,
     StoreUnavailableFrame,
+    Subscription,
 )
 from netpulse_core import AlertStatus, DatapathId
 
@@ -98,6 +100,10 @@ def _broadcaster(
 
 def _updated(alert: Alert, *, minutes: int) -> Alert:
     return alert.model_copy(update={"updated_at": alert.updated_at + timedelta(minutes=minutes)})
+
+
+async def _next_within_a_second(subscription: Subscription) -> LiveFrame:
+    return await asyncio.wait_for(anext(subscription), timeout=1)
 
 
 async def test_tick_broadcasts_a_kpi_frame_to_every_subscriber(
@@ -305,3 +311,52 @@ async def test_unavailable_alerts_are_skipped_and_retried(
         "alerts",
         "heartbeat",
     ]
+
+
+async def test_late_subscriber_receives_the_open_alert_snapshot(make_alert: MakeAlert) -> None:
+    older, newer = make_alert(1, "open"), make_alert(2, "open")
+    alerts = ScriptedAlertsQuery([older, newer], [])
+    broadcaster = _broadcaster(ScriptedLatestSamplesQuery([], []), alerts=alerts)
+    early = broadcaster.subscribe()
+    await broadcaster.tick()
+
+    late = broadcaster.subscribe()
+    await broadcaster.tick()
+
+    assert await _next_within_a_second(late) == AlertFrame(generated_at=NOW, alerts=(newer, older))
+    assert await _next_within_a_second(late) == HeartbeatFrame(at=NOW)
+    assert [(await _next_within_a_second(early)).type for _ in range(3)] == [
+        "heartbeat",
+        "alerts",
+        "heartbeat",
+    ]
+
+
+async def test_snapshot_follows_resolved_and_reopened_alerts(make_alert: MakeAlert) -> None:
+    first, second = make_alert(1, "open"), make_alert(2, "open")
+    resolved = _updated(make_alert(1, "resolved"), minutes=5)
+    third = _updated(make_alert(3, "open"), minutes=6)
+    alerts = ScriptedAlertsQuery([first, second], [resolved, third])
+    broadcaster = _broadcaster(ScriptedLatestSamplesQuery([], []), alerts=alerts)
+
+    await broadcaster.tick()
+    await broadcaster.tick()
+    late = broadcaster.subscribe()
+
+    assert await _next_within_a_second(late) == AlertFrame(generated_at=NOW, alerts=(third, second))
+
+
+async def test_subscriber_gets_no_snapshot_without_open_alerts(make_alert: MakeAlert) -> None:
+    alerts = ScriptedAlertsQuery(
+        [make_alert(1, "open")], [_updated(make_alert(1, "resolved"), minutes=5)], []
+    )
+    broadcaster = _broadcaster(ScriptedLatestSamplesQuery([], [], []), queue_size=8, alerts=alerts)
+    before_any_tick = broadcaster.subscribe()
+    await broadcaster.tick()
+    await broadcaster.tick()
+
+    after_resolution = broadcaster.subscribe()
+    await broadcaster.tick()
+
+    assert await _next_within_a_second(after_resolution) == HeartbeatFrame(at=NOW)
+    assert (await _next_within_a_second(before_any_tick)).type == "heartbeat"

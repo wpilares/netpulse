@@ -140,6 +140,26 @@ def test_websocket_streams_alert_frames_after_the_kpi_frame(make_alert: MakeAler
         }
 
 
+def test_websocket_sends_the_open_alert_snapshot_right_after_hello(make_alert: MakeAlert) -> None:
+    client, broadcaster = _live_client([], alerts=[make_alert(1, "open")])
+
+    with client.websocket_connect("/ws/telemetry") as first:
+        first.receive_json()
+        first.portal.call(broadcaster.tick)
+        first.receive_json()
+        first.receive_json()
+
+    with client.websocket_connect("/ws/telemetry") as websocket:
+        assert websocket.receive_json() == {"type": "hello", "version": "0.1.0"}
+        snapshot = websocket.receive_json()
+
+        assert snapshot["type"] == "alerts"
+        assert snapshot["generated_at"] == "2026-10-20T12:05:00Z"
+        assert [alert["id"] for alert in snapshot["alerts"]] == [1]
+        websocket.send_json({"type": "ping"})
+        assert websocket.receive_json() == {"type": "pong"}
+
+
 def test_websocket_closes_slow_consumers() -> None:
     client, broadcaster = _live_client([], queue_size=1)
 
