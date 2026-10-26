@@ -125,7 +125,7 @@ Variables read by Compose (`.env`):
 | `NETWORK_OVS_DATAPATH` | `user` | `kernel` on a Linux host with the `openvswitch` module loaded, for better throughput |
 | `NETWORK_TREE_DEPTH`, `NETWORK_TREE_FANOUT` | `2`, `2` | Shape of the Mininet tree topology |
 
-Detection and alert policy are collector settings. Compose does not forward them yet, so under Compose add the ones you change to the collector's `environment` in `docker-compose.yml`; when running the collector directly, export them:
+Detection and alert policy are collector settings. Compose maps each one from a `.env` variable without the `NETPULSE_` prefix (for example `COLLECTOR_DETECTION_WARNING_Z=4`); when running the collector directly, export the full names:
 
 | Variable | Default | Effect |
 | --- | --- | --- |
