@@ -121,7 +121,7 @@ Counters are stored cumulative, exactly as OpenFlow reports them; every rate is 
 | --- | --- | --- |
 | `rx_bps`, `tx_bps` | `8 * Δbytes / Δt` | `Δt` comes from the switch's `duration_sec` when both samples have it, from collection timestamps otherwise |
 | `rx_pps`, `tx_pps` | `Δpackets / Δt` | |
-| `drop_rate`, `error_rate` | `Δdropped / Δpackets`, `Δerrors / Δpackets` | Over rx and tx together |
+| `drop_rate`, `error_rate` | `Δdropped / (Δpackets + Δdropped)`, `Δerrors / (Δpackets + Δerrors)` | Over rx and tx together; the denominator is the frames the port attempted, so a port that only drops reports `1.0` instead of `null` |
 | `utilization` | `max(rx_bps, tx_bps) / capacity` | Capacity is `NETPULSE_API_LINK_CAPACITY_BPS` by default; with `NETPULSE_API_LINK_CAPACITY_SOURCE=openflow` the switch and summary endpoints and the WebSocket feed use the port's `curr_speed_bps` from the topology (cached for 30 s) when the switch reports one and the configured value otherwise; the history endpoint and the collector always use the configured value; `null` when no capacity applies |
 | `counter_reset` | any negative difference or `Δt <= 0` | The point keeps `counter_reset: true` and every rate `null` |
 
