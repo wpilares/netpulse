@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from netpulse_api.app import create_app
 from netpulse_api.topology import (
+    ControllerHost,
     ControllerLink,
     ControllerLinkEnd,
     ControllerPort,
@@ -68,10 +69,10 @@ def test_tree_becomes_switch_and_host_nodes_with_undirected_edges() -> None:
         "h:3:2",
     ]
     assert topology.nodes[0] == TopologyNode(
-        id="s:1", kind="switch", dpid=1, port_no=None, label="s1"
+        id="s:1", kind="switch", dpid=1, port_no=None, label="s1", address=None, mac=None
     )
     assert topology.nodes[3] == TopologyNode(
-        id="h:2:1", kind="host", dpid=2, port_no=1, label="s2-eth1"
+        id="h:2:1", kind="host", dpid=2, port_no=1, label="s2-eth1", address=None, mac=None
     )
     assert topology.edges == (
         TopologyEdge(source="s:1", target="s:2", source_port=1, target_port=3),
@@ -137,6 +138,61 @@ def test_host_label_falls_back_to_the_port_number() -> None:
     assert topology.nodes[1].label == "h5:7"
 
 
+def _host(mac: str, *ipv4: str) -> ControllerHost:
+    return ControllerHost(mac=mac, ipv4=ipv4)
+
+
+def _hosted_switch(*hosts: ControllerHost) -> ControllerTopology:
+    port = ControllerPort(port_no=1, name="s1-eth1", hw_addr="00:00:00:00:00:01", hosts=hosts)
+    return ControllerTopology(switches=(ControllerSwitch(dpid=1, ports=(port,)),), links=())
+
+
+def test_host_nodes_are_labelled_by_their_first_ipv4_address() -> None:
+    controller = _hosted_switch(_host("00:00:00:00:00:11", "10.0.0.1", "10.0.0.101"))
+
+    topology = build_topology(controller, generated_at=GENERATED_AT)
+
+    assert topology.nodes[1] == TopologyNode(
+        id="h:1:1",
+        kind="host",
+        dpid=1,
+        port_no=1,
+        label="10.0.0.1",
+        address="10.0.0.1",
+        mac="00:00:00:00:00:11",
+    )
+
+
+def test_a_host_without_ipv4_keeps_the_port_label_but_exposes_its_mac() -> None:
+    controller = _hosted_switch(_host("00:00:00:00:00:11"))
+
+    topology = build_topology(controller, generated_at=GENERATED_AT)
+
+    assert topology.nodes[1].label == "s1-eth1"
+    assert topology.nodes[1].address is None
+    assert topology.nodes[1].mac == "00:00:00:00:00:11"
+
+
+def test_several_hosts_on_one_port_show_the_first_address_and_a_count() -> None:
+    controller = _hosted_switch(
+        _host("00:00:00:00:00:12"),
+        _host("00:00:00:00:00:13", "10.0.0.3"),
+        _host("00:00:00:00:00:14", "10.0.0.4"),
+    )
+
+    topology = build_topology(controller, generated_at=GENERATED_AT)
+
+    assert topology.nodes[1].label == "10.0.0.3 +2"
+    assert topology.nodes[1].address == "10.0.0.3"
+    assert topology.nodes[1].mac == "00:00:00:00:00:13"
+
+
+def test_controller_ports_default_to_no_hosts() -> None:
+    port = ControllerPort(port_no=1, name="s1-eth1", hw_addr="00:00:00:00:00:01")
+
+    assert port.hosts == ()
+
+
 class StubTopologyQuery:
     def __init__(self, result: ControllerTopology | Exception) -> None:
         self.result = result
@@ -161,6 +217,8 @@ def test_topology_endpoint_returns_nodes_and_edges() -> None:
         "dpid": 1,
         "port_no": None,
         "label": "s1",
+        "address": None,
+        "mac": None,
     }
     assert payload["edges"][0] == {
         "source": "s:1",

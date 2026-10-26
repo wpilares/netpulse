@@ -1,6 +1,11 @@
 from datetime import UTC, datetime
 
-from netpulse_controller.stats_store import PortCounters, PortDescription, StatsStore
+from netpulse_controller.stats_store import (
+    HostDescription,
+    PortCounters,
+    PortDescription,
+    StatsStore,
+)
 
 COLLECTED_AT = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
 
@@ -130,8 +135,18 @@ def test_topology_report_lists_switch_ports_and_directed_links() -> None:
             {
                 "dpid": 1,
                 "ports": [
-                    {"port_no": 1, "name": "s1-eth1", "hw_addr": "00:00:00:00:01:01"},
-                    {"port_no": 2, "name": "s1-eth2", "hw_addr": "00:00:00:00:01:02"},
+                    {
+                        "port_no": 1,
+                        "name": "s1-eth1",
+                        "hw_addr": "00:00:00:00:01:01",
+                        "hosts": [],
+                    },
+                    {
+                        "port_no": 2,
+                        "name": "s1-eth2",
+                        "hw_addr": "00:00:00:00:01:02",
+                        "hosts": [],
+                    },
                 ],
             },
             {"dpid": 2, "ports": []},
@@ -141,3 +156,75 @@ def test_topology_report_lists_switch_ports_and_directed_links() -> None:
             {"src": {"dpid": 2, "port_no": 1}, "dst": {"dpid": 1, "port_no": 2}},
         ],
     }
+
+
+def _host(mac: str, *ipv4: str, dpid: int = 1, port_no: int = 1) -> HostDescription:
+    return HostDescription(mac=mac, ipv4=ipv4, dpid=dpid, port_no=port_no)
+
+
+def test_hosts_are_listed_per_port_sorted_by_mac() -> None:
+    store = StatsStore()
+    store.record_ports(1, (_port(1), _port(2)))
+    store.record_host(_host("00:00:00:00:00:02", "10.0.0.2"))
+    store.record_host(_host("00:00:00:00:00:01", "10.0.0.1", "10.0.0.11"))
+    store.record_host(_host("00:00:00:00:00:03", port_no=2))
+
+    assert store.hosts(1) == (
+        _host("00:00:00:00:00:01", "10.0.0.1", "10.0.0.11"),
+        _host("00:00:00:00:00:02", "10.0.0.2"),
+        _host("00:00:00:00:00:03", port_no=2),
+    )
+    assert store.topology_report()["switches"] == [
+        {
+            "dpid": 1,
+            "ports": [
+                {
+                    "port_no": 1,
+                    "name": "s1-eth1",
+                    "hw_addr": "00:00:00:00:01:01",
+                    "hosts": [
+                        {"mac": "00:00:00:00:00:01", "ipv4": ["10.0.0.1", "10.0.0.11"]},
+                        {"mac": "00:00:00:00:00:02", "ipv4": ["10.0.0.2"]},
+                    ],
+                },
+                {
+                    "port_no": 2,
+                    "name": "s1-eth2",
+                    "hw_addr": "00:00:00:00:01:02",
+                    "hosts": [{"mac": "00:00:00:00:00:03", "ipv4": []}],
+                },
+            ],
+        }
+    ]
+
+
+def test_a_host_lives_on_one_port_and_follows_moves() -> None:
+    store = StatsStore()
+    store.record_ports(1, (_port(1),))
+    store.record_ports(2, (_port(1, dpid=2),))
+    store.record_host(_host("00:00:00:00:00:01", "10.0.0.1"))
+    store.record_host(_host("00:00:00:00:00:01", "10.0.0.1", dpid=2))
+
+    assert store.hosts(1) == ()
+    assert store.hosts(2) == (_host("00:00:00:00:00:01", "10.0.0.1", dpid=2),)
+
+
+def test_hosts_disappear_with_their_port_switch_or_on_removal() -> None:
+    store = StatsStore()
+    store.record_ports(1, (_port(1), _port(2)))
+    store.record_ports(2, (_port(1, dpid=2),))
+    store.record_host(_host("00:00:00:00:00:01", "10.0.0.1"))
+    store.record_host(_host("00:00:00:00:00:02", "10.0.0.2", port_no=2))
+    store.record_host(_host("00:00:00:00:00:03", "10.0.0.3", dpid=2))
+    store.record_host(_host("00:00:00:00:00:04", "10.0.0.4", dpid=2))
+
+    store.remove_port(1, 2)
+    store.remove_host("00:00:00:00:00:04")
+    store.remove_host("ff:ff:ff:ff:ff:ff")
+
+    assert store.hosts(1) == (_host("00:00:00:00:00:01", "10.0.0.1"),)
+    assert store.hosts(2) == (_host("00:00:00:00:00:03", "10.0.0.3", dpid=2),)
+
+    store.unregister(2)
+
+    assert store.hosts(2) == ()

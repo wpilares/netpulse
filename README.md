@@ -23,7 +23,7 @@ NetPulse emulates a software-defined network with Mininet, controls it with an O
 | Topology | `GET /api/v1/topology` | Switches and hosts as discovered by LLDP; links recolored on every frame by the busiest direction's utilization (idle, low under 30 %, medium under 70 %, high under 90 %, saturated) |
 | Switch ports | `kpis` frames | Per-port utilization, drop and error rates, packet rates and a receive/transmit throughput chart over the last 120 frames (about ten minutes) |
 
-Charts and the topology graph are hand-rolled SVG with no chart library. The first frame comes from `GET /api/v1/kpis/summary` and the first alert list from `GET /api/v1/alerts`; after that the client follows the WebSocket (the first `alerts` frame after every connect carries all open alerts, later ones only the changed rows, which the client upserts by id), reconnects with exponential backoff (1 s doubling to 30 s plus jitter) and pings every 15 s to keep proxies from idling the socket out. Host labels are the switch port names facing them (`s2-eth2`), because the controller learns ports from LLDP but never sees Mininet host names.
+Charts and the topology graph are hand-rolled SVG with no chart library. The first frame comes from `GET /api/v1/kpis/summary` and the first alert list from `GET /api/v1/alerts`; after that the client follows the WebSocket (the first `alerts` frame after every connect carries all open alerts, later ones only the changed rows, which the client upserts by id), reconnects with exponential backoff (1 s doubling to 30 s plus jitter) and pings every 15 s to keep proxies from idling the socket out. Host labels are the IPv4 address the controller learned from the host's ARP traffic (`10.0.0.2`), falling back to the switch port name facing it (`s2-eth2`) until the host has sent its first ARP frame.
 
 ## Architecture
 
@@ -52,7 +52,7 @@ Data flows left to right. The controller requests `OFPPortStatsRequest` from eve
 | --- | --- | --- | --- |
 | Core | `packages/core` | pydantic 2, pydantic-settings | Shared typed telemetry models, KPI computation and settings base |
 | Network | `network` | Mininet, Open vSwitch, iperf3 | Emulated tree topology on shaped links, scheduled traffic between hosts |
-| Controller | `services/controller` | OS-Ken 4 (Python 3.13) | Tracks switches, installs forwarding, discovers links with LLDP, polls port stats, serves stats and topology over REST |
+| Controller | `services/controller` | OS-Ken 4 (Python 3.13) | Tracks switches, installs forwarding, discovers links with LLDP and hosts from ARP, polls port stats, serves stats and topology over REST |
 | Collector | `services/collector` | asyncio, httpx2, psycopg 3 | Polls the controller, validates samples, writes them idempotently with retry and backoff, scores every port against its EWMA baseline and persists alerts |
 | API | `services/api` | FastAPI, httpx2, psycopg 3, uvicorn | `/health`, port statistics, KPIs, topology and service info under `/api/v1`, `/ws/telemetry` WebSocket |
 | Web | `web` | Bun, Vite, React 19, TypeScript, Vitest, Biome | Live dashboard: KPI summary cards, topology graph, per-port throughput charts, reconnecting WebSocket client |
@@ -184,14 +184,14 @@ A range with no data returns an empty `points` list.
 
 ### Topology
 
-The controller runs OS-Ken's `switches` app with link observation on: every switch gets an LLDP-to-controller flow at priority `0xFFFF` above the `NORMAL` forwarding rule, so neighbours discover each other through LLDP, and `GET /topology` on the controller lists switches, their ports and the directed links OS-Ken reports. The API reads that payload over HTTP (`NETPULSE_API_CONTROLLER_URL`, `NETPULSE_API_CONTROLLER_TIMEOUT_SECONDS`, 2 s) and turns it into nodes and edges:
+The controller runs OS-Ken's `switches` app with link observation on: every switch gets an LLDP-to-controller flow at priority `0xFFFF` above the `NORMAL` forwarding rule, so neighbours discover each other through LLDP, and `GET /topology` on the controller lists switches, their ports and the directed links OS-Ken reports. Hosts come from ARP: a second flow at priority `1` matches `eth_type 0x0806` and outputs to both `NORMAL` and `CONTROLLER` (128 bytes), so forwarding is unchanged while OS-Ken's host discovery learns `(mac, ipv4, port)` from every ARP frame that enters an edge port. The Mininet network runs without static ARP entries so hosts really resolve each other. Each controller port lists its hosts (`"hosts": [{"mac": ..., "ipv4": [...]}]`). The API reads that payload over HTTP (`NETPULSE_API_CONTROLLER_URL`, `NETPULSE_API_CONTROLLER_TIMEOUT_SECONDS`, 2 s) and turns it into nodes and edges:
 
 ```json
 {
   "generated_at": "2026-10-26T09:00:00Z",
   "nodes": [
-    {"id": "s:1", "kind": "switch", "dpid": 1, "port_no": null, "label": "s1"},
-    {"id": "h:2:1", "kind": "host", "dpid": 2, "port_no": 1, "label": "s2-eth1"}
+    {"id": "s:1", "kind": "switch", "dpid": 1, "port_no": null, "label": "s1", "address": null, "mac": null},
+    {"id": "h:2:1", "kind": "host", "dpid": 2, "port_no": 1, "label": "10.0.0.1", "address": "10.0.0.1", "mac": "00:00:00:00:00:01"}
   ],
   "edges": [
     {"source": "s:1", "target": "s:2", "source_port": 1, "target_port": 3},
@@ -200,7 +200,7 @@ The controller runs OS-Ken's `switches` app with link observation on: every swit
 }
 ```
 
-Each inter-switch link appears once with the lower `dpid` as `source`. A switch port that is neither reserved nor the end of a link is assumed to face a host and becomes a `host` node attached to its switch.
+Each inter-switch link appears once with the lower `dpid` as `source`. A switch port that is neither reserved nor the end of a link is assumed to face a host and becomes a `host` node attached to its switch. Its `label` is the first IPv4 address of the first learned host on that port (`10.0.0.3 +1` when several hosts share the port), or the port name until an ARP frame has been seen; `address` and `mac` carry the same host or `null`. Before LLDP has settled, a broadcast ARP can be learned on an inter-switch port; such entries are ignored because linked ports never become hosts, and the next ARP from the host moves it to its real edge port.
 
 ### WebSocket `/ws/telemetry`
 

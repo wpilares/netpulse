@@ -6,7 +6,12 @@ from wsgiref.types import WSGIEnvironment
 from wsgiref.util import setup_testing_defaults
 
 from netpulse_controller.rest import create_rest_app
-from netpulse_controller.stats_store import PortCounters, PortDescription, StatsStore
+from netpulse_controller.stats_store import (
+    HostDescription,
+    PortCounters,
+    PortDescription,
+    StatsStore,
+)
 
 type OptExcInfo = tuple[type[BaseException], BaseException, TracebackType] | tuple[None, None, None]
 
@@ -79,6 +84,9 @@ def test_topology_returns_the_store_report() -> None:
         1, (PortDescription(port_no=1, name="s1-eth1", hw_addr="aa:bb:cc:dd:ee:01"),)
     )
     store.record_link(1, 1, 2, 1)
+    store.record_host(
+        HostDescription(mac="00:00:00:00:00:01", ipv4=("10.0.0.1",), dpid=1, port_no=1)
+    )
 
     status, payload = _call(store, "/topology")
 
@@ -86,4 +94,7 @@ def test_topology_returns_the_store_report() -> None:
     assert payload == store.topology_report()
     assert payload["links"] == [
         {"src": {"dpid": 1, "port_no": 1}, "dst": {"dpid": 2, "port_no": 1}}
+    ]
+    assert payload["switches"][0]["ports"][0]["hosts"] == [
+        {"mac": "00:00:00:00:00:01", "ipv4": ["10.0.0.1"]}
     ]

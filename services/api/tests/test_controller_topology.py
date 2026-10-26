@@ -10,7 +10,17 @@ Handler = Callable[[httpx2.Request], httpx2.Response]
 
 PAYLOAD = {
     "switches": [
-        {"dpid": 1, "ports": [{"port_no": 1, "name": "s1-eth1", "hw_addr": "00:00:00:00:00:01"}]},
+        {
+            "dpid": 1,
+            "ports": [
+                {
+                    "port_no": 1,
+                    "name": "s1-eth1",
+                    "hw_addr": "00:00:00:00:00:01",
+                    "hosts": [{"mac": "00:00:00:00:00:11", "ipv4": ["10.0.0.1"]}],
+                }
+            ],
+        },
         {"dpid": 2, "ports": []},
     ],
     "links": [{"src": {"dpid": 1, "port_no": 1}, "dst": {"dpid": 2, "port_no": 1}}],
@@ -36,6 +46,7 @@ async def test_fetch_returns_the_validated_controller_topology() -> None:
     assert requested == ["/topology"]
     assert topology == ControllerTopology.model_validate(PAYLOAD)
     assert topology.links[0].dst.port_no == 1
+    assert topology.switches[0].ports[0].hosts[0].ipv4 == ("10.0.0.1",)
 
 
 async def test_server_errors_are_unavailable() -> None:
