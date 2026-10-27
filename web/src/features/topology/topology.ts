@@ -1,34 +1,18 @@
 import { useEffect, useState } from "react";
-import { isArrayOf, isNullableNumber, isOneOf, isRecord } from "../../lib/guards";
-import type { KpiSnapshot } from "../telemetry/frames";
+import {
+  type KpiSnapshot,
+  parseWith,
+  type Topology,
+  type TopologyEdge,
+  type TopologyNode,
+  topologySchema,
+} from "../../api/schemas";
 import { type PortKey, portKey } from "../telemetry/history";
 
+export type { NodeKind, Topology, TopologyEdge, TopologyNode } from "../../api/schemas";
+
 const TOPOLOGY_PATH = "/api/v1/topology";
-const NODE_KINDS = ["switch", "host"] as const;
 const VERTICAL_PADDING = 48;
-
-export type NodeKind = (typeof NODE_KINDS)[number];
-
-export interface TopologyNode {
-  readonly id: string;
-  readonly kind: NodeKind;
-  readonly dpid: number | null;
-  readonly port_no: number | null;
-  readonly label: string;
-}
-
-export interface TopologyEdge {
-  readonly source: string;
-  readonly target: string;
-  readonly source_port: number | null;
-  readonly target_port: number | null;
-}
-
-export interface Topology {
-  readonly generated_at: string;
-  readonly nodes: readonly TopologyNode[];
-  readonly edges: readonly TopologyEdge[];
-}
 
 export type TopologyState =
   | { readonly kind: "loading" }
@@ -57,52 +41,7 @@ export interface TopologyLayout {
 
 export type UtilizationLevel = "unknown" | "idle" | "low" | "medium" | "high" | "saturated";
 
-const parseNode = (value: unknown): TopologyNode | null => {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const { id, kind, dpid, port_no, label } = value;
-  if (
-    typeof id !== "string" ||
-    !isOneOf(NODE_KINDS, kind) ||
-    !isNullableNumber(dpid) ||
-    !isNullableNumber(port_no) ||
-    typeof label !== "string"
-  ) {
-    return null;
-  }
-  return { id, kind, dpid, port_no, label };
-};
-
-const parseEdge = (value: unknown): TopologyEdge | null => {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const { source, target, source_port, target_port } = value;
-  if (
-    typeof source !== "string" ||
-    typeof target !== "string" ||
-    !isNullableNumber(source_port) ||
-    !isNullableNumber(target_port)
-  ) {
-    return null;
-  }
-  return { source, target, source_port, target_port };
-};
-
-const isNode = (value: unknown): value is TopologyNode => parseNode(value) !== null;
-const isEdge = (value: unknown): value is TopologyEdge => parseEdge(value) !== null;
-
-export const parseTopology = (value: unknown): Topology | null => {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const { generated_at, nodes, edges } = value;
-  if (typeof generated_at !== "string" || !isArrayOf(nodes, isNode) || !isArrayOf(edges, isEdge)) {
-    return null;
-  }
-  return { generated_at, nodes, edges };
-};
+export const parseTopology = parseWith(topologySchema);
 
 export const fetchTopology = async (fetcher: typeof fetch, signal?: AbortSignal): Promise<TopologyState> => {
   try {

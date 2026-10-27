@@ -1,34 +1,15 @@
-import { isOneOf, isRecord } from "../../lib/guards";
+import { type ApiHealthReport, healthReportSchema, parseWith } from "../../api/schemas";
+
+export type { ApiHealthReport, DatabaseState, ServiceStatus } from "../../api/schemas";
 
 const HEALTH_PATH = "/health";
-
-const SERVICE_STATUSES = ["ok", "degraded"] as const;
-const DATABASE_STATES = ["up", "down", "disabled"] as const;
-
-export type ServiceStatus = (typeof SERVICE_STATUSES)[number];
-export type DatabaseState = (typeof DATABASE_STATES)[number];
-
-export interface ApiHealthReport {
-  readonly status: ServiceStatus;
-  readonly database: DatabaseState;
-  readonly version: string;
-}
 
 export type ApiHealth =
   | { readonly kind: "loading" }
   | { readonly kind: "offline" }
   | { readonly kind: "online"; readonly report: ApiHealthReport };
 
-export const parseApiHealth = (payload: unknown): ApiHealthReport | null => {
-  if (!isRecord(payload)) {
-    return null;
-  }
-  const { status, database, version } = payload;
-  if (!isOneOf(SERVICE_STATUSES, status) || !isOneOf(DATABASE_STATES, database) || typeof version !== "string") {
-    return null;
-  }
-  return { status, database, version };
-};
+export const parseApiHealth = parseWith(healthReportSchema);
 
 export const fetchApiHealth = async (fetcher: typeof fetch, signal?: AbortSignal): Promise<ApiHealth> => {
   try {
