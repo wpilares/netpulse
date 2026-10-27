@@ -67,6 +67,7 @@ def make_alert() -> MakeAlert:
         last_seen_at = opened_at + timedelta(minutes=1)
         return Alert(
             id=alert_id,
+            seq=alert_id,
             dpid=1,
             port_no=alert_id,
             metric="rx_bps",

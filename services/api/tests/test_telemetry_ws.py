@@ -5,7 +5,7 @@ import pytest
 from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 
-from netpulse_api.alerts import Alert, AlertStatusFilter
+from netpulse_api.alerts import MAX_ALERT_LIMIT, Alert, AlertStatusFilter
 from netpulse_api.app import create_app
 from netpulse_api.kpis import SamplePair
 from netpulse_api.live import LiveKpiBroadcaster
@@ -34,7 +34,7 @@ class StaticAlertsQuery:
     async def fetch(self, status: AlertStatusFilter, *, limit: int) -> list[Alert]:
         return self.alerts
 
-    async def fetch_updated_since(self, since: datetime) -> list[Alert]:
+    async def fetch_after(self, seq: int, *, limit: int = MAX_ALERT_LIMIT) -> list[Alert]:
         return []
 
 
@@ -122,6 +122,7 @@ def test_websocket_streams_alert_frames_after_the_kpi_frame(make_alert: MakeAler
             "alerts": [
                 {
                     "id": 1,
+                    "seq": 1,
                     "dpid": 1,
                     "port_no": 1,
                     "metric": "rx_bps",

@@ -234,7 +234,8 @@ Migrations live in [`db/migrations`](db/migrations) and are applied by the `migr
 | --- | --- | --- | --- | --- |
 | `port_stats` | hypertable, 1-day chunks, compressed after 1 day | `(dpid, port_no, time)` | One row per port per poll: cumulative rx/tx packets, bytes, dropped, errors and `duration_sec` | 7 days |
 | `port_stats_1m` | continuous aggregate, refreshed every minute, real-time | `(dpid, port_no, bucket)` | Last counter values in each 1-minute bucket and the number of `samples` | 90 days |
-| `alerts` | plain table, partial unique index on open `(dpid, port_no, metric)`, index on `(status, opened_at desc)` | `id` | One row per alert: key, severity, status, `opened_at`, `last_seen_at`, `resolved_at`, `acknowledged_at`, value, expected, z-score, `updated_at` | none yet |
+| `alerts` | plain table, partial unique index on open `(dpid, port_no, metric)`, index on `(status, opened_at desc)`, unique index on `seq` | `id` | One row per alert: key, severity, status, `opened_at`, `last_seen_at`, `resolved_at`, `acknowledged_at`, value, expected, z-score, `updated_at`, `seq` (from `alerts_seq`, bumped on every write) | resolved rows older than `COLLECTOR_ALERT_RETENTION_DAYS` |
+| `alert_baselines` | plain table | `(dpid, port_no, metric)` | The collector's EWMA baseline per port metric: `mean`, `variance`, `samples`, `updated_at` | none yet |
 
 Sample writes are idempotent (`ON CONFLICT DO NOTHING`), so a retried poll cycle never duplicates rows.
 
@@ -256,7 +257,7 @@ All REST routes live under `/api/v1`; interactive docs are at `/docs`. Invalid p
 
 Every KPI point carries `dpid`, `port_no`, `computed_at`, `interval_seconds`, `rx_bps`, `tx_bps`, `rx_pps`, `tx_pps`, `drop_rate`, `error_rate`, `utilization` and `counter_reset`; rates are `null` when they cannot be computed.
 
-Every alert carries `id`, `dpid`, `port_no`, `metric` (`rx_bps`, `tx_bps`, `drop_rate` or `error_rate`), `severity` (`warning` or `critical`), `status` (`open` or `resolved`), `opened_at`, `last_seen_at`, `resolved_at`, `acknowledged_at`, `value`, `expected`, `zscore` and `updated_at`.
+Every alert carries `id`, `seq` (a monotonic change counter shared by all alerts, bumped on every write), `dpid`, `port_no`, `metric` (`rx_bps`, `tx_bps`, `drop_rate` or `error_rate`), `severity` (`warning` or `critical`), `status` (`open` or `resolved`), `opened_at`, `last_seen_at`, `resolved_at`, `acknowledged_at`, `value`, `expected`, `zscore` and `updated_at`.
 
 ### Port statistics example
 
@@ -288,7 +289,7 @@ curl -s "http://localhost:8000/api/v1/alerts?status=all&limit=1"
 {
   "generated_at": "2026-10-26T12:25:10Z",
   "alerts": [
-    {"id": 62, "dpid": 3, "port_no": 3, "metric": "drop_rate", "severity": "critical", "status": "resolved", "opened_at": "2026-10-26T12:23:04Z", "last_seen_at": "2026-10-26T12:23:34Z", "resolved_at": "2026-10-26T12:24:38Z", "acknowledged_at": null, "value": 1.0, "expected": 0.0, "zscore": 200.0, "updated_at": "2026-10-26T12:24:38Z"}
+    {"id": 62, "seq": 418, "dpid": 3, "port_no": 3, "metric": "drop_rate", "severity": "critical", "status": "resolved", "opened_at": "2026-10-26T12:23:04Z", "last_seen_at": "2026-10-26T12:23:34Z", "resolved_at": "2026-10-26T12:24:38Z", "acknowledged_at": null, "value": 1.0, "expected": 0.0, "zscore": 200.0, "updated_at": "2026-10-26T12:24:38Z"}
   ]
 }
 ```
@@ -326,7 +327,7 @@ The socket pushes the same network summary as `GET /api/v1/kpis/summary`, plus p
 | `{"type": "store_unavailable", "at": "..."}` | server to client | Every cycle in which the database cannot be queried |
 | `{"type": "ping"}` / `{"type": "pong"}` | client to server / reply | Keepalive; any other client message gets `{"type": "error", "reason": "unsupported message"}` |
 
-Alert changes are picked up by an `updated_at` cursor. `updated_at` is PostgreSQL's `now()`, fixed at transaction start, so a row committed just after the API's poll but stamped before the cursor is skipped until its next change; the window is milliseconds and a reconnect gets the full open snapshot, so the dashboard self-heals ([ADR 0008](docs/adr/0008-anomaly-detection-and-alerting.md) lists the gapless alternative).
+Alert changes are picked up by a `seq` cursor: every write takes the next value of the `alerts_seq` sequence, the broadcaster fetches rows with `seq` above the highest it has seen (at most 500 per cycle, in `seq` order) and advances the cursor. The collector writes from one connection in one loop, so its `seq` order equals its commit order; an acknowledgement committed concurrently with a collector write can still take a lower `seq` than the one already broadcast, and a reconnect gets the full open snapshot, so the dashboard self-heals.
 
 Frames queue per client (`NETPULSE_API_LIVE_QUEUE_SIZE`, 16); a client that falls behind is disconnected with close code `1013` and reason `slow consumer`.
 

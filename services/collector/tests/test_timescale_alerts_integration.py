@@ -79,6 +79,7 @@ SELECT_ALERTS = """
     WHERE dpid = %s::numeric AND port_no = %s AND metric = %s
     ORDER BY id
 """
+SELECT_SEQS = "SELECT id, seq FROM alerts ORDER BY id"
 
 
 def _event(
@@ -110,6 +111,50 @@ async def _rows(pool: ConnectionPool) -> list[tuple[object, ...]]:
     async with pool.connection() as connection:
         cursor = await connection.execute(SELECT_ALERTS, KEY)
         return await cursor.fetchall()
+
+
+async def _seqs(pool: ConnectionPool) -> list[tuple[int, int]]:
+    async with pool.connection() as connection:
+        cursor = await connection.execute(SELECT_SEQS)
+        return [(row[0], row[1]) for row in await cursor.fetchall()]
+
+
+async def test_every_write_bumps_the_alert_seq(pool: ConnectionPool) -> None:
+    repository = TimescaleAlertRepository(pool)
+    other_key: AlertKey = (7, 3, "rx_bps")
+    await repository.apply([_event("opened")])
+    ((_, opened_seq),) = await _seqs(pool)
+
+    await repository.apply([_event("refreshed", last_seen_at=T0 + timedelta(seconds=5), value=0.2)])
+    ((_, refreshed_seq),) = await _seqs(pool)
+    await repository.apply(
+        [_event("escalated", severity="critical", last_seen_at=T0 + timedelta(seconds=10))]
+    )
+    ((_, escalated_seq),) = await _seqs(pool)
+    await repository.apply(
+        [
+            AlertEvent(
+                kind="opened", state=_event("opened").state.model_copy(update={"key": other_key})
+            )
+        ]
+    )
+    (_, (_, other_seq)) = await _seqs(pool)
+    await repository.apply([_event("resolved", resolved_at=T0 + timedelta(seconds=70))])
+    ((_, resolved_seq), _) = await _seqs(pool)
+
+    assert opened_seq < refreshed_seq < escalated_seq < other_seq < resolved_seq
+
+
+async def test_merging_a_second_open_event_bumps_the_seq(pool: ConnectionPool) -> None:
+    repository = TimescaleAlertRepository(pool)
+    await repository.apply([_event("opened")])
+    ((alert_id, first_seq),) = await _seqs(pool)
+
+    await repository.apply([_event("opened", severity="critical", value=0.5)])
+
+    ((merged_id, merged_seq),) = await _seqs(pool)
+    assert merged_id == alert_id
+    assert merged_seq > first_seq
 
 
 async def test_lifecycle_events_insert_update_and_resolve_one_row(pool: ConnectionPool) -> None:

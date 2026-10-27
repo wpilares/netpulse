@@ -98,6 +98,7 @@ async def pool(database_url: str) -> AsyncIterator[ConnectionPool]:
         await connection_pool.wait()
         async with connection_pool.connection() as connection:
             await connection.execute("TRUNCATE alerts RESTART IDENTITY")
+            await connection.execute("ALTER SEQUENCE alerts_seq RESTART")
             async with connection.cursor() as cursor:
                 await cursor.executemany(INSERT, ROWS)
         yield connection_pool
@@ -149,17 +150,26 @@ async def test_fetch_honours_the_limit(pool: ConnectionPool) -> None:
     assert _keys(alerts) == [(2, 1, "tx_bps"), (2, 1, "error_rate")]
 
 
-async def test_fetch_updated_since_returns_newer_rows_oldest_first(pool: ConnectionPool) -> None:
+async def test_fetch_after_returns_rows_past_the_cursor_in_seq_order(pool: ConnectionPool) -> None:
     store = TimescaleAlertStore(pool)
 
-    changed = await store.fetch_updated_since(START + MINUTE * 3)
-    nothing = await store.fetch_updated_since(START + MINUTE * 5)
+    changed = await store.fetch_after(2)
+    nothing = await store.fetch_after(4)
+    everything = await store.fetch_after(0)
 
-    assert [(alert.id, alert.updated_at) for alert in changed] == [
-        (4, START + MINUTE * 5),
-    ]
+    assert [(alert.id, alert.seq) for alert in changed] == [(3, 3), (4, 4)]
     assert nothing == []
-    assert [alert.id for alert in await store.fetch_updated_since(START)] == [1, 2, 3, 4]
+    assert [alert.seq for alert in everything] == [1, 2, 3, 4]
+
+
+async def test_fetch_after_honours_the_limit(pool: ConnectionPool) -> None:
+    store = TimescaleAlertStore(pool)
+
+    first_page = await store.fetch_after(0, limit=2)
+    second_page = await store.fetch_after(first_page[-1].seq, limit=2)
+
+    assert [alert.seq for alert in first_page] == [1, 2]
+    assert [alert.seq for alert in second_page] == [3, 4]
 
 
 async def test_acknowledge_sets_the_timestamp_once(pool: ConnectionPool) -> None:
@@ -174,6 +184,7 @@ async def test_acknowledge_sets_the_timestamp_once(pool: ConnectionPool) -> None
     assert first.id == 1
     assert first.acknowledged_at == first_at
     assert first.updated_at > START + MINUTE
+    assert first.seq == 5
     assert second == first
     (stored,) = [alert for alert in await store.fetch("open", limit=100) if alert.id == 1]
     assert stored == first
@@ -185,11 +196,12 @@ async def test_acknowledge_reports_unknown_alerts(pool: ConnectionPool) -> None:
     assert await store.acknowledge(99, at=START) is None
 
 
-async def test_acknowledge_is_visible_to_updated_since(pool: ConnectionPool) -> None:
+async def test_acknowledge_is_visible_after_the_cursor(pool: ConnectionPool) -> None:
     store = TimescaleAlertStore(pool)
 
     acknowledged = await store.acknowledge(2, at=START + MINUTE * 10)
-    changed = await store.fetch_updated_since(START + MINUTE * 5)
+    changed = await store.fetch_after(4)
 
     assert acknowledged is not None
+    assert acknowledged.seq == 5
     assert changed == [acknowledged]
