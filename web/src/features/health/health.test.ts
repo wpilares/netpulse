@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
-import { fetchApiHealth, parseApiHealth } from "./health";
+import { describe, expect, it } from "vitest";
+import { parseApiHealth, toApiHealth } from "./health";
+
+const report = { status: "ok", database: "up", version: "1.0.0" } as const;
 
 describe("parseApiHealth", () => {
   it("accepts a healthy payload", () => {
@@ -29,42 +31,17 @@ describe("parseApiHealth", () => {
   });
 });
 
-describe("fetchApiHealth", () => {
-  it("returns the parsed health report", async () => {
-    const fetcher = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(Response.json({ status: "ok", database: "disabled", version: "0.1.0" }));
-
-    await expect(fetchApiHealth(fetcher)).resolves.toEqual({
-      kind: "online",
-      report: { status: "ok", database: "disabled", version: "0.1.0" },
-    });
-    expect(fetcher).toHaveBeenCalledWith(
-      "/health",
-      expect.objectContaining({ headers: { Accept: "application/json" } }),
-    );
+describe("toApiHealth", () => {
+  it("is loading until the first report arrives", () => {
+    expect(toApiHealth({ status: "pending", data: undefined })).toEqual({ kind: "loading" });
   });
 
-  it("reads degraded reports returned with a 503 status", async () => {
-    const fetcher = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(Response.json({ status: "degraded", database: "down", version: "0.1.0" }, { status: 503 }));
-
-    await expect(fetchApiHealth(fetcher)).resolves.toEqual({
-      kind: "online",
-      report: { status: "degraded", database: "down", version: "0.1.0" },
-    });
+  it("is online with the report on success", () => {
+    expect(toApiHealth({ status: "success", data: report })).toEqual({ kind: "online", report });
   });
 
-  it("reports the API as offline when the request fails", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockRejectedValue(new TypeError("network down"));
-
-    await expect(fetchApiHealth(fetcher)).resolves.toEqual({ kind: "offline" });
-  });
-
-  it("reports the API as offline when the payload is invalid", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ hello: "world" }));
-
-    await expect(fetchApiHealth(fetcher)).resolves.toEqual({ kind: "offline" });
+  it("is offline when the last poll failed, even with an older report cached", () => {
+    expect(toApiHealth({ status: "error", data: report })).toEqual({ kind: "offline" });
+    expect(toApiHealth({ status: "error", data: undefined })).toEqual({ kind: "offline" });
   });
 });

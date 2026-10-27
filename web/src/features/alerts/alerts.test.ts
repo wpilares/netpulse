@@ -1,10 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { ApiError } from "../../api/client";
 import {
-  acknowledgeAlert,
   alertSummary,
   describeAlert,
   describeAlertError,
-  fetchAlerts,
   openAlerts,
   parseAlert,
   parseAlertList,
@@ -13,9 +12,6 @@ import {
 import { makeAlert } from "./fixtures";
 
 const generatedAt = "2026-10-26T10:00:05Z";
-
-const respondWith = (body: unknown, status = 200) =>
-  vi.fn<typeof fetch>(() => Promise.resolve(status === 200 ? Response.json(body) : new Response(null, { status })));
 
 describe("parseAlert", () => {
   it("parses a full alert payload", () => {
@@ -49,62 +45,12 @@ describe("parseAlertList", () => {
   });
 });
 
-describe("fetchAlerts", () => {
-  it("requests alerts with the status and limit query", async () => {
-    const list = { generated_at: generatedAt, alerts: [makeAlert()] };
-    const fetcher = respondWith(list);
-
-    await expect(fetchAlerts(fetcher, { status: "resolved", limit: 50 })).resolves.toEqual(list);
-    expect(fetcher).toHaveBeenCalledWith(
-      "/api/v1/alerts?status=resolved&limit=50",
-      expect.objectContaining({ headers: { Accept: "application/json" } }),
-    );
-  });
-
-  it("throws an unavailable error when storage is down", async () => {
-    await expect(fetchAlerts(respondWith(null, 503), { status: "open", limit: 100 })).rejects.toMatchObject({
-      kind: "unavailable",
-    });
-  });
-
-  it("throws an invalid error on a malformed body", async () => {
-    await expect(fetchAlerts(respondWith({ alerts: "none" }), { status: "open", limit: 100 })).rejects.toMatchObject({
-      kind: "invalid",
-    });
-  });
-
-  it("throws an unavailable error when the request itself fails", async () => {
-    const fetcher = vi.fn<typeof fetch>(() => Promise.reject(new TypeError("Failed to fetch")));
-    await expect(fetchAlerts(fetcher, { status: "open", limit: 100 })).rejects.toMatchObject({ kind: "unavailable" });
-  });
-});
-
-describe("acknowledgeAlert", () => {
-  it("posts the acknowledgement and returns the updated alert", async () => {
-    const acked = makeAlert({ id: 7, acknowledged_at: "2026-10-26T10:03:00Z" });
-    const fetcher = respondWith(acked);
-
-    await expect(acknowledgeAlert(fetcher, 7)).resolves.toEqual(acked);
-    expect(fetcher).toHaveBeenCalledWith("/api/v1/alerts/7/ack", expect.objectContaining({ method: "POST" }));
-  });
-
-  it("throws a not found error for an unknown id", async () => {
-    await expect(acknowledgeAlert(respondWith(null, 404), 9)).rejects.toMatchObject({ kind: "not_found" });
-  });
-
-  it("throws an unavailable error when storage is down", async () => {
-    await expect(acknowledgeAlert(respondWith(null, 503), 9)).rejects.toMatchObject({ kind: "unavailable" });
-  });
-});
-
 describe("describeAlertError", () => {
-  it("turns typed failures into user facing text", async () => {
-    await expect(acknowledgeAlert(respondWith(null, 404), 9).catch(describeAlertError)).resolves.toBe(
-      "Alert not found",
-    );
-    await expect(
-      fetchAlerts(respondWith(null, 503), { status: "open", limit: 1 }).catch(describeAlertError),
-    ).resolves.toBe("Alert storage unavailable");
+  it("turns typed API failures into user facing text", () => {
+    expect(describeAlertError(new ApiError("not_found", "missing", 404))).toBe("Alert not found");
+    expect(describeAlertError(new ApiError("unavailable", "down", 503))).toBe("Alert storage unavailable");
+    expect(describeAlertError(new ApiError("invalid", "bad shape"))).toBe("Alerts response could not be read");
+    expect(describeAlertError(new ApiError("network", "offline"))).toBe("Alerts API unreachable");
     expect(describeAlertError(new Error("boom"))).toBe("Alerts unavailable");
   });
 });

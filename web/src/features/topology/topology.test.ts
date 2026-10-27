@@ -1,8 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { makePort, makeSnapshot } from "../telemetry/fixtures";
 import {
   edgeUtilization,
-  fetchTopology,
   layoutTopology,
   parseTopology,
   type Topology,
@@ -45,25 +44,6 @@ describe("parseTopology", () => {
     { ...treeTopology, edges: [{ source: 1 }] },
   ])("rejects malformed payload %j", (payload) => {
     expect(parseTopology(payload)).toBeNull();
-  });
-});
-
-describe("fetchTopology", () => {
-  it("returns the parsed topology", async () => {
-    const fetcher = vi.fn<typeof fetch>().mockResolvedValue(Response.json(treeTopology));
-    await expect(fetchTopology(fetcher)).resolves.toEqual({ kind: "ready", topology: treeTopology });
-    expect(fetcher).toHaveBeenCalledWith(
-      "/api/v1/topology",
-      expect.objectContaining({ headers: { Accept: "application/json" } }),
-    );
-  });
-
-  it("reports the controller as unavailable on 503 or network failure", async () => {
-    const unavailable = vi.fn<typeof fetch>().mockResolvedValue(Response.json({ detail: "down" }, { status: 503 }));
-    await expect(fetchTopology(unavailable)).resolves.toEqual({ kind: "unavailable" });
-
-    const failing = vi.fn<typeof fetch>().mockRejectedValue(new TypeError("offline"));
-    await expect(fetchTopology(failing)).resolves.toEqual({ kind: "unavailable" });
   });
 });
 

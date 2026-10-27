@@ -2,24 +2,24 @@ import { type ApiHealthReport, healthReportSchema, parseWith } from "../../api/s
 
 export type { ApiHealthReport, DatabaseState, ServiceStatus } from "../../api/schemas";
 
-const HEALTH_PATH = "/health";
-
 export type ApiHealth =
   | { readonly kind: "loading" }
   | { readonly kind: "offline" }
   | { readonly kind: "online"; readonly report: ApiHealthReport };
 
+export interface HealthQueryResult {
+  readonly status: "pending" | "error" | "success";
+  readonly data: ApiHealthReport | undefined;
+}
+
 export const parseApiHealth = parseWith(healthReportSchema);
 
-export const fetchApiHealth = async (fetcher: typeof fetch, signal?: AbortSignal): Promise<ApiHealth> => {
-  try {
-    const response = await fetcher(HEALTH_PATH, {
-      headers: { Accept: "application/json" },
-      ...(signal === undefined ? {} : { signal }),
-    });
-    const report = parseApiHealth(await response.json());
-    return report === null ? { kind: "offline" } : { kind: "online", report };
-  } catch {
+export const toApiHealth = ({ status, data }: HealthQueryResult): ApiHealth => {
+  if (status === "error") {
     return { kind: "offline" };
   }
+  if (data === undefined) {
+    return { kind: "loading" };
+  }
+  return { kind: "online", report: data };
 };

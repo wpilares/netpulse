@@ -1,6 +1,7 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useReducer, useRef } from "react";
-import { type Alert, upsertAlerts } from "../alerts/alerts";
-import { type KpiFrame, type LiveFrame, parseLiveFrame } from "./frames";
+import { applyLiveFrame } from "./cacheBridge";
+import { type LiveFrame, parseLiveFrame } from "./frames";
 import { appendHistory, emptyHistory, type PortHistory } from "./history";
 
 export interface WebSocketLike {
@@ -32,9 +33,7 @@ export interface TelemetrySocketOptions {
 
 export interface TelemetrySocketState {
   readonly status: SocketStatus;
-  readonly latest: KpiFrame | null;
   readonly history: PortHistory;
-  readonly alerts: readonly Alert[];
   readonly alertsSynced: boolean;
   readonly storeUnavailable: boolean;
   readonly lastHeartbeatAt: string | null;
@@ -54,9 +53,7 @@ const TELEMETRY_PATH = "/ws/telemetry";
 
 const initialState: TelemetrySocketState = {
   status: "connecting",
-  latest: null,
   history: emptyHistory,
-  alerts: [],
   alertsSynced: false,
   storeUnavailable: false,
   lastHeartbeatAt: null,
@@ -74,14 +71,9 @@ const createBrowserSocket = (url: string): WebSocketLike => new WebSocket(url);
 const applyFrame = (state: TelemetrySocketState, frame: LiveFrame, maxPoints: number): TelemetrySocketState => {
   switch (frame.type) {
     case "kpis":
-      return {
-        ...state,
-        latest: frame,
-        history: appendHistory(state.history, frame, maxPoints),
-        storeUnavailable: false,
-      };
+      return { ...state, history: appendHistory(state.history, frame, maxPoints), storeUnavailable: false };
     case "alerts":
-      return { ...state, alerts: upsertAlerts(state.alerts, frame.alerts), alertsSynced: true };
+      return { ...state, alertsSynced: true };
     case "heartbeat":
       return { ...state, lastHeartbeatAt: frame.at };
     case "store_unavailable":
@@ -100,7 +92,7 @@ const reduce = (state: TelemetrySocketState, action: Action): TelemetrySocketSta
     case "frame":
       return applyFrame(state, action.frame, action.maxPoints);
     case "reconnecting":
-      return { ...state, status: "reconnecting", attempt: action.attempt, alerts: [], alertsSynced: false };
+      return { ...state, status: "reconnecting", attempt: action.attempt, alertsSynced: false };
     case "closed":
       return { ...state, status: "closed" };
   }
@@ -125,6 +117,7 @@ export const useTelemetrySocket = ({
   pingIntervalMs = DEFAULT_PING_INTERVAL_MS,
   random = Math.random,
 }: TelemetrySocketOptions = {}): TelemetrySocketState => {
+  const queryClient = useQueryClient();
   const [state, dispatch] = useReducer(reduce, initialState);
   const { baseMs, maxMs, jitterMs } = backoff;
   const callbacks = useRef({ createSocket, random });
@@ -138,6 +131,7 @@ export const useTelemetrySocket = ({
     let reconnectTimer: number | null = null;
     let pingTimer: number | null = null;
     let attempt = 0;
+    let alertsSynced = false;
     let disposed = false;
 
     const stopPing = () => {
@@ -157,15 +151,21 @@ export const useTelemetrySocket = ({
       };
       current.onmessage = (event) => {
         const frame = parseMessage(event.data);
-        if (frame !== null) {
-          dispatch({ type: "frame", frame, maxPoints });
+        if (frame === null) {
+          return;
         }
+        void applyLiveFrame(queryClient, frame, alertsSynced);
+        if (frame.type === "alerts") {
+          alertsSynced = true;
+        }
+        dispatch({ type: "frame", frame, maxPoints });
       };
       current.onclose = () => {
         stopPing();
         if (disposed) {
           return;
         }
+        alertsSynced = false;
         const delay = reconnectDelayMs(attempt, { baseMs, maxMs, jitterMs }, callbacks.current.random);
         attempt += 1;
         dispatch({ type: "reconnecting", attempt });
@@ -184,7 +184,7 @@ export const useTelemetrySocket = ({
       socket?.close();
       dispatch({ type: "closed" });
     };
-  }, [url, maxPoints, baseMs, maxMs, jitterMs, pingIntervalMs]);
+  }, [queryClient, url, maxPoints, baseMs, maxMs, jitterMs, pingIntervalMs]);
 
   return state;
 };
