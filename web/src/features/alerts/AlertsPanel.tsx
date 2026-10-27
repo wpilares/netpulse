@@ -1,6 +1,6 @@
 import { formatClock, formatRelative } from "../../lib/time";
 import { type Alert, describeAlert, formatMetricValue, formatZscore, type Severity } from "./alerts";
-import type { AlertsView } from "./useAlerts";
+import type { AlertsView } from "./useAlertsView";
 
 export interface AlertsPanelProps extends AlertsView {
   readonly now?: number;

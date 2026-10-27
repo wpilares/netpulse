@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import {
   type KpiSnapshot,
   parseWith,
@@ -11,7 +10,6 @@ import { type PortKey, portKey } from "../telemetry/history";
 
 export type { NodeKind, Topology, TopologyEdge, TopologyNode } from "../../api/schemas";
 
-const TOPOLOGY_PATH = "/api/v1/topology";
 const VERTICAL_PADDING = 48;
 
 export type TopologyState =
@@ -42,44 +40,6 @@ export interface TopologyLayout {
 export type UtilizationLevel = "unknown" | "idle" | "low" | "medium" | "high" | "saturated";
 
 export const parseTopology = parseWith(topologySchema);
-
-export const fetchTopology = async (fetcher: typeof fetch, signal?: AbortSignal): Promise<TopologyState> => {
-  try {
-    const response = await fetcher(TOPOLOGY_PATH, {
-      headers: { Accept: "application/json" },
-      ...(signal === undefined ? {} : { signal }),
-    });
-    if (!response.ok) {
-      return { kind: "unavailable" };
-    }
-    const topology = parseTopology(await response.json());
-    return topology === null ? { kind: "unavailable" } : { kind: "ready", topology };
-  } catch {
-    return { kind: "unavailable" };
-  }
-};
-
-export const useTopology = (fetcher: typeof fetch, refreshMs: number): TopologyState => {
-  const [state, setState] = useState<TopologyState>({ kind: "loading" });
-
-  useEffect(() => {
-    const controller = new AbortController();
-    const refresh = async () => {
-      const next = await fetchTopology(fetcher, controller.signal);
-      if (!controller.signal.aborted) {
-        setState(next);
-      }
-    };
-    void refresh();
-    const timer = window.setInterval(() => void refresh(), refreshMs);
-    return () => {
-      controller.abort();
-      window.clearInterval(timer);
-    };
-  }, [fetcher, refreshMs]);
-
-  return state;
-};
 
 const compareNodes = (left: TopologyNode, right: TopologyNode): number => {
   if (left.dpid !== right.dpid) {

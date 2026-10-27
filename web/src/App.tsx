@@ -1,34 +1,28 @@
 import { AlertsBadge } from "./components/AlertsBadge";
 import { ConnectionStatus } from "./components/ConnectionStatus";
 import { AlertsPanel } from "./features/alerts/AlertsPanel";
-import { useAlerts } from "./features/alerts/useAlerts";
+import { useAlertsView } from "./features/alerts/useAlertsView";
 import { ApiHealthStatus } from "./features/health/ApiHealthStatus";
 import { SummaryCards } from "./features/kpis/SummaryCards";
 import { SwitchPortsPanel } from "./features/kpis/SwitchPortsPanel";
-import { useKpiSummary } from "./features/kpis/summary";
+import { useKpiSummaryQuery } from "./features/kpis/useKpiSummaryQuery";
 import { useTelemetrySocket, type WebSocketLike } from "./features/telemetry/useTelemetrySocket";
 import { TopologyView } from "./features/topology/TopologyView";
-import { useTopology } from "./features/topology/topology";
-
-const TOPOLOGY_REFRESH_MS = 30_000;
-
-const browserFetch: typeof fetch = (input, init) => fetch(input, init);
+import { useTopologyQuery } from "./features/topology/useTopologyQuery";
 
 export interface AppProps {
-  readonly fetcher?: typeof fetch;
   readonly createSocket?: (url: string) => WebSocketLike;
   readonly socketUrl?: string;
 }
 
-export const App = ({ fetcher = browserFetch, createSocket, socketUrl }: AppProps) => {
+export const App = ({ createSocket, socketUrl }: AppProps) => {
   const socket = useTelemetrySocket({
     ...(createSocket === undefined ? {} : { createSocket }),
     ...(socketUrl === undefined ? {} : { url: socketUrl }),
   });
-  const initialSummary = useKpiSummary(fetcher);
-  const topology = useTopology(fetcher, TOPOLOGY_REFRESH_MS);
-  const alerts = useAlerts(fetcher, socket);
-  const snapshot = socket.latest ?? initialSummary;
+  const snapshot = useKpiSummaryQuery();
+  const topology = useTopologyQuery();
+  const alerts = useAlertsView({ alertsSynced: socket.alertsSynced });
 
   return (
     <div className="shell">
@@ -38,12 +32,12 @@ export const App = ({ fetcher = browserFetch, createSocket, socketUrl }: AppProp
           <p className="shell__subtitle">Real-time SDN network monitoring</p>
         </div>
         <div className="shell__badges">
-          <ApiHealthStatus fetcher={fetcher} />
+          <ApiHealthStatus />
           <ConnectionStatus
             status={socket.status}
             attempt={socket.attempt}
             storeUnavailable={socket.storeUnavailable}
-            lastUpdateAt={socket.latest?.generated_at ?? socket.lastHeartbeatAt ?? snapshot?.generated_at ?? null}
+            lastUpdateAt={snapshot?.generated_at ?? socket.lastHeartbeatAt ?? null}
           />
           <AlertsBadge summary={alerts.summary} />
         </div>

@@ -1,36 +1,22 @@
-import { act, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it } from "vitest";
 import { App } from "./App";
+import { ApiError } from "./api/client";
+import type { Alert } from "./api/schemas";
 import { makeAlert, makeAlertsFrame } from "./features/alerts/fixtures";
 import { createFakeSocket, FakeSocket } from "./features/telemetry/fakeSocket";
 import { makeKpiFrame, makePort, makeSnapshot } from "./features/telemetry/fixtures";
+import { createFakeApiClient } from "./test/fakeApiClient";
+import { renderWithProviders } from "./test/renderWithProviders";
 
-const topology = {
-  generated_at: "2026-10-26T10:00:00Z",
-  nodes: [
-    { id: "s:1", kind: "switch", dpid: 1, port_no: null, label: "s1" },
-    { id: "h:1:1", kind: "host", dpid: 1, port_no: 1, label: "h1" },
-  ],
-  edges: [{ source: "s:1", target: "h:1:1", source_port: 1, target_port: null }],
+const renderApp = (apiClient = createFakeApiClient()) =>
+  renderWithProviders(<App createSocket={createFakeSocket} socketUrl="ws://test/ws/telemetry" />, { apiClient });
+
+const deliver = async (payload: unknown): Promise<void> => {
+  await act(async () => {
+    FakeSocket.at(0).message(payload);
+  });
 };
-
-const requestUrl = (input: string | URL | Request): string =>
-  typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-
-const fakeFetch = vi.fn<typeof fetch>((input) => {
-  switch (requestUrl(input)) {
-    case "/health":
-      return Promise.resolve(Response.json({ status: "ok", database: "up", version: "0.3.0" }));
-    case "/api/v1/kpis/summary":
-      return Promise.resolve(Response.json(makeSnapshot([makePort({ rx_bps: 1_000_000 })])));
-    case "/api/v1/topology":
-      return Promise.resolve(Response.json(topology));
-    case "/api/v1/alerts?status=open&limit=100":
-      return Promise.resolve(Response.json({ generated_at: "2026-10-26T10:00:00Z", alerts: [] }));
-    default:
-      return Promise.resolve(new Response(null, { status: 404 }));
-  }
-});
 
 describe("App", () => {
   beforeEach(() => {
@@ -38,7 +24,9 @@ describe("App", () => {
   });
 
   it("paints the REST summary first, then follows live frames", async () => {
-    render(<App fetcher={fakeFetch} createSocket={createFakeSocket} socketUrl="ws://test/ws/telemetry" />);
+    renderApp(
+      createFakeApiClient({ getKpiSummary: () => Promise.resolve(makeSnapshot([makePort({ rx_bps: 1_000_000 })])) }),
+    );
 
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("NetPulse");
     expect(await screen.findByText(/API online/)).toBeInTheDocument();
@@ -48,26 +36,70 @@ describe("App", () => {
     expect(screen.getByText("Connecting")).toBeInTheDocument();
 
     act(() => FakeSocket.at(0).open());
-    act(() => FakeSocket.at(0).message(makeKpiFrame([makePort({ rx_bps: 3_000_000 })])));
+    await deliver(makeKpiFrame([makePort({ rx_bps: 3_000_000 })]));
 
     expect(screen.getByText("Live")).toBeInTheDocument();
-    expect(screen.getByText("Inbound throughput").nextElementSibling).toHaveTextContent("3.0 Mb/s");
+    await waitFor(() =>
+      expect(screen.getByText("Inbound throughput").nextElementSibling).toHaveTextContent("3.0 Mb/s"),
+    );
     expect(screen.getByRole("button", { name: "Switch 1", pressed: true })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: /Port 1 throughput/ })).toBeInTheDocument();
   });
 
   it("shows live alerts in the header badge and the alerts panel", async () => {
-    render(<App fetcher={fakeFetch} createSocket={createFakeSocket} socketUrl="ws://test/ws/telemetry" />);
+    renderApp();
 
     expect(await screen.findByText("No alerts")).toBeInTheDocument();
     expect(screen.getByText("No open alerts")).toBeInTheDocument();
 
     act(() => FakeSocket.at(0).open());
-    act(() => FakeSocket.at(0).message(makeAlertsFrame([makeAlert({ id: 1, severity: "critical" })])));
+    await deliver(makeAlertsFrame([makeAlert({ id: 1, severity: "critical" })]));
 
     expect(screen.getByText("1 alert").closest("output")).toHaveAttribute("data-tone", "critical");
     expect(screen.getByRole("heading", { name: "Alerts" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Acknowledge" })).toBeInTheDocument();
     expect(screen.queryByText("No open alerts")).not.toBeInTheDocument();
+  });
+
+  it("acknowledges an alert optimistically and rolls back when the API rejects it", async () => {
+    let fail: (error: Error) => void = () => undefined;
+    const apiClient = createFakeApiClient({
+      acknowledgeAlert: () =>
+        new Promise<Alert>((_resolve, reject) => {
+          fail = reject;
+        }),
+    });
+    renderApp(apiClient);
+    act(() => FakeSocket.at(0).open());
+    await deliver(makeAlertsFrame([makeAlert({ id: 1 })]));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Acknowledge" }));
+
+    await waitFor(() => expect(screen.getByText("1 acknowledged")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Acknowledge" })).not.toBeInTheDocument();
+    expect(apiClient.acknowledgeAlert).toHaveBeenCalledWith(1);
+
+    await act(async () => {
+      fail(new ApiError("not_found", "missing", 404));
+    });
+
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Alert not found"));
+    expect(screen.getByText("0 acknowledged")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Acknowledge" })).toBeEnabled();
+  });
+
+  it("loads resolved alerts on demand", async () => {
+    const resolved = makeAlert({ id: 9, status: "resolved", resolved_at: "2026-10-26T10:03:00Z" });
+    const apiClient = createFakeApiClient({
+      listAlerts: ({ status }) =>
+        Promise.resolve({ generated_at: "2026-10-26T10:00:05Z", alerts: status === "resolved" ? [resolved] : [] }),
+    });
+    renderApp(apiClient);
+    expect(await screen.findByText("No open alerts")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Show resolved alerts" }));
+
+    expect(await screen.findByRole("list", { name: "Resolved alerts" })).toBeInTheDocument();
+    expect(apiClient.listAlerts).toHaveBeenCalledWith({ status: "resolved", limit: 50 }, expect.any(AbortSignal));
   });
 });

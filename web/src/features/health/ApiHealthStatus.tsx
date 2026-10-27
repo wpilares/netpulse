@@ -1,19 +1,11 @@
 import { HealthIndicator } from "./HealthIndicator";
-import { useApiHealth } from "./useApiHealth";
-
-const DEFAULT_POLL_INTERVAL_MS = 10_000;
-
-const browserFetch: typeof fetch = (input, init) => fetch(input, init);
+import { HEALTH_POLL_INTERVAL_MS, useHealthQuery } from "./useHealthQuery";
 
 export interface ApiHealthStatusProps {
-  readonly fetcher?: typeof fetch;
   readonly pollIntervalMs?: number;
 }
 
-export const ApiHealthStatus = ({
-  fetcher = browserFetch,
-  pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
-}: ApiHealthStatusProps) => {
-  const health = useApiHealth(fetcher, pollIntervalMs);
+export const ApiHealthStatus = ({ pollIntervalMs = HEALTH_POLL_INTERVAL_MS }: ApiHealthStatusProps) => {
+  const health = useHealthQuery(pollIntervalMs);
   return <HealthIndicator health={health} />;
 };
