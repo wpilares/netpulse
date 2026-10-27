@@ -2,7 +2,7 @@ from typing import Annotated, Literal, Self
 
 from pydantic import AnyHttpUrl, Field, HttpUrl, PostgresDsn, model_validator
 
-from netpulse_core import AlertPolicy, DetectionConfig, ServiceSettings
+from netpulse_core import AlertPolicy, AlertRoute, DetectionConfig, ServiceSettings, parse_routes
 
 RepositoryKind = Literal["log", "timescale"]
 
@@ -30,6 +30,9 @@ class CollectorSettings(ServiceSettings, env_prefix="NETPULSE_COLLECTOR_", env_i
     alert_cooldown_seconds: Annotated[float, Field(ge=0)] = 120.0
     alert_open_after_signals: Annotated[int, Field(ge=1)] = 3
     alert_webhook_url: HttpUrl | None = None
+    alert_routes: str = ""
+    alert_retention_days: Annotated[int, Field(ge=1)] = 7
+    alert_retention_every_cycles: Annotated[int, Field(ge=1)] = 720
 
     @model_validator(mode="after")
     def require_database_for_timescale(self) -> Self:
@@ -40,6 +43,11 @@ class CollectorSettings(ServiceSettings, env_prefix="NETPULSE_COLLECTOR_", env_i
     @model_validator(mode="after")
     def require_consistent_detection_thresholds(self) -> Self:
         self.detection_config()
+        return self
+
+    @model_validator(mode="after")
+    def require_well_formed_alert_routes(self) -> Self:
+        self.routes()
         return self
 
     def detection_config(self) -> DetectionConfig:
@@ -61,3 +69,10 @@ class CollectorSettings(ServiceSettings, env_prefix="NETPULSE_COLLECTOR_", env_i
             cooldown_seconds=self.alert_cooldown_seconds,
             open_after_signals=self.alert_open_after_signals,
         )
+
+    def routes(self) -> tuple[AlertRoute, ...]:
+        configured = parse_routes(self.alert_routes)
+        if self.alert_webhook_url is None:
+            return configured
+        default = AlertRoute(name="default", webhook_url=str(self.alert_webhook_url))
+        return (default, *configured)

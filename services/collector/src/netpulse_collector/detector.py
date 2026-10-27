@@ -1,6 +1,7 @@
 import logging
 from collections.abc import Callable, Iterable
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 from netpulse_collector.alerts import AlertNotifier, AlertRepository, AlertWriteError
 from netpulse_core import (
@@ -107,20 +108,48 @@ class AnomalyDetector:
         return max(collected) if collected else self._clock()
 
 
+@dataclass(frozen=True, slots=True)
+class AlertRetention:
+    older_than: timedelta
+    every_cycles: int
+
+
 class DetectionObserver:
     def __init__(
-        self, detector: AnomalyDetector, repository: AlertRepository, notifier: AlertNotifier
+        self,
+        detector: AnomalyDetector,
+        repository: AlertRepository,
+        notifier: AlertNotifier,
+        retention: AlertRetention | None = None,
     ) -> None:
         self._detector = detector
         self._repository = repository
         self._notifier = notifier
+        self._retention = retention
+        self._cycles = 0
 
     async def observe(self, report: PortStatsReport) -> None:
         events = self._detector.observe(report)
-        if not events:
-            return
+        if events:
+            await self._store(events)
+            await self._notifier.notify(events)
+        await self._purge_when_due()
+
+    async def _store(self, events: tuple[AlertEvent, ...]) -> None:
         try:
             await self._repository.apply(events)
         except AlertWriteError:
             logger.exception("storing %d alert events failed", len(events))
-        await self._notifier.notify(events)
+
+    async def _purge_when_due(self) -> None:
+        if self._retention is None:
+            return
+        self._cycles += 1
+        if self._cycles % self._retention.every_cycles:
+            return
+        try:
+            purged = await self._repository.purge_resolved(self._retention.older_than)
+        except AlertWriteError:
+            logger.exception("purging resolved alerts failed")
+            return
+        logger.info("purged %d resolved alerts older than %s", purged, self._retention.older_than)

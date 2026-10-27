@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from netpulse_collector.alerts import AlertWriteError
-from netpulse_collector.detector import AnomalyDetector, DetectionObserver
+from netpulse_collector.detector import AlertRetention, AnomalyDetector, DetectionObserver
 from netpulse_core import (
     AlertEvent,
     AlertPolicy,
@@ -236,14 +236,20 @@ def test_empty_report_resolves_with_the_clock() -> None:
 
 
 class RecordingAlertRepository:
-    def __init__(self) -> None:
+    def __init__(self, purged_per_call: int = 2) -> None:
         self.applied: list[Sequence[AlertEvent]] = []
+        self.purged: list[timedelta] = []
+        self._purged_per_call = purged_per_call
 
     async def load_open(self) -> tuple[AlertState, ...]:
         return ()
 
     async def apply(self, events: Sequence[AlertEvent]) -> None:
         self.applied.append(events)
+
+    async def purge_resolved(self, older_than: timedelta) -> int:
+        self.purged.append(older_than)
+        return self._purged_per_call
 
 
 class FailingAlertRepository:
@@ -252,6 +258,9 @@ class FailingAlertRepository:
 
     async def apply(self, events: Sequence[AlertEvent]) -> None:
         raise AlertWriteError("alerts table unavailable")
+
+    async def purge_resolved(self, older_than: timedelta) -> int:
+        raise AlertWriteError("alerts table locked")
 
 
 class RecordingAlertNotifier:
@@ -304,3 +313,44 @@ async def test_observer_logs_write_failures_and_still_notifies(
 
     assert len(notifier.notified) == 1
     assert "alerts table unavailable" in caplog.text
+
+
+RETENTION = AlertRetention(older_than=timedelta(days=7), every_cycles=3)
+
+
+async def test_observer_purges_resolved_alerts_every_n_cycles(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repository = RecordingAlertRepository()
+    observer = DetectionObserver(_detector(), repository, RecordingAlertNotifier(), RETENTION)
+
+    with caplog.at_level(logging.INFO, logger="netpulse_collector.detector"):
+        for cycle in range(1, 7):
+            await observer.observe(_report(cycle))
+
+    assert repository.purged == [timedelta(days=7), timedelta(days=7)]
+    assert caplog.text.count("purged 2 resolved alerts") == 2
+
+
+async def test_observer_without_retention_never_purges() -> None:
+    repository = RecordingAlertRepository()
+    observer = DetectionObserver(_detector(), repository, RecordingAlertNotifier())
+
+    for cycle in range(1, 7):
+        await observer.observe(_report(cycle))
+
+    assert repository.purged == []
+
+
+async def test_observer_logs_purge_failures_and_keeps_polling(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    observer = DetectionObserver(
+        _detector(), FailingAlertRepository(), RecordingAlertNotifier(), RETENTION
+    )
+
+    with caplog.at_level(logging.ERROR, logger="netpulse_collector.detector"):
+        for cycle in range(1, 4):
+            await observer.observe(_report(cycle))
+
+    assert "alerts table locked" in caplog.text

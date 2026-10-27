@@ -232,3 +232,36 @@ async def test_update_for_an_unknown_open_alert_is_logged(
     assert await _rows(pool) == []
     assert "resolved" in caplog.text
     assert f"dpid={DPID} port={KEY[1]} metric={KEY[2]}" in caplog.text
+
+
+async def test_purge_resolved_deletes_only_old_resolved_alerts(pool: ConnectionPool) -> None:
+    repository = TimescaleAlertRepository(pool)
+    now = datetime.now(UTC)
+    recent_key: AlertKey = (7, 3, "rx_bps")
+    await repository.apply([_event("opened")])
+    await repository.apply([_event("resolved", resolved_at=now - timedelta(days=10))])
+    await repository.apply(
+        [
+            AlertEvent(
+                kind="opened", state=_event("opened").state.model_copy(update={"key": recent_key})
+            )
+        ]
+    )
+    await repository.apply(
+        [
+            AlertEvent(
+                kind="resolved",
+                state=_event("resolved", resolved_at=now - timedelta(minutes=1)).state.model_copy(
+                    update={"key": recent_key}
+                ),
+            )
+        ]
+    )
+
+    purged = await repository.purge_resolved(timedelta(days=7))
+
+    assert purged == 1
+    assert await _rows(pool) == []
+    async with pool.connection() as connection:
+        cursor = await connection.execute(SELECT_ALERTS, recent_key)
+        assert [row[0] for row in await cursor.fetchall()] == ["resolved"]

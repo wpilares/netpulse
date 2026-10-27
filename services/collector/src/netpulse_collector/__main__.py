@@ -4,6 +4,7 @@ import signal
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import timedelta
 
 import httpx2
 import psycopg
@@ -18,10 +19,11 @@ from netpulse_collector.alerts import (
     LoggingAlertRepository,
 )
 from netpulse_collector.controller_client import ControllerClient
-from netpulse_collector.detector import AnomalyDetector, DetectionObserver
+from netpulse_collector.detector import AlertRetention, AnomalyDetector, DetectionObserver
 from netpulse_collector.poller import PortStatsObserver, run_polling
 from netpulse_collector.repository import LoggingPortStatsRepository, PortStatsRepository
 from netpulse_collector.retry import RetryingPortStatsRepository, RetryPolicy
+from netpulse_collector.routing import RoutingAlertNotifier
 from netpulse_collector.settings import CollectorSettings
 from netpulse_collector.timescale_alerts import TimescaleAlertRepository
 from netpulse_collector.timescale_repository import TimescalePortStatsRepository
@@ -68,11 +70,18 @@ async def open_repositories(settings: CollectorSettings) -> AsyncIterator[Reposi
 
 @asynccontextmanager
 async def open_notifier(settings: CollectorSettings) -> AsyncIterator[AlertNotifier]:
-    if settings.alert_webhook_url is None:
+    routes = settings.routes()
+    if not routes:
         yield LoggingAlertNotifier()
         return
     async with httpx2.AsyncClient(timeout=settings.request_timeout_seconds) as http:
-        yield WebhookAlertNotifier(http, str(settings.alert_webhook_url))
+        webhooks = {
+            route.name: WebhookAlertNotifier(http, route.webhook_url)
+            for route in routes
+            if route.webhook_url is not None
+        }
+        logger.info("routing alert events to %d routes (%d webhooks)", len(routes), len(webhooks))
+        yield RoutingAlertNotifier(routes, webhooks)
 
 
 async def build_observer(
@@ -86,7 +95,11 @@ async def build_observer(
         link_capacity_bps=settings.link_capacity_bps,
     )
     await seed_open_alerts(detector, repositories.alerts)
-    return DetectionObserver(detector, repositories.alerts, notifier)
+    retention = AlertRetention(
+        older_than=timedelta(days=settings.alert_retention_days),
+        every_cycles=settings.alert_retention_every_cycles,
+    )
+    return DetectionObserver(detector, repositories.alerts, notifier, retention)
 
 
 async def seed_open_alerts(detector: AnomalyDetector, repository: AlertRepository) -> None:

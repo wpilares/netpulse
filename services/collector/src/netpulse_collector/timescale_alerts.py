@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Sequence
+from datetime import timedelta
 from typing import Final
 
 import psycopg
@@ -37,6 +38,11 @@ RESOLVE_OPEN_ALERT: Final = """
     UPDATE alerts
     SET status = 'resolved', resolved_at = %s, updated_at = now()
     WHERE dpid = %s::numeric AND port_no = %s AND metric = %s AND status = 'open'
+"""
+
+PURGE_RESOLVED_ALERTS: Final = """
+    DELETE FROM alerts
+    WHERE status = 'resolved' AND resolved_at < now() - %(older_than)s
 """
 
 SELECT_OPEN_ALERTS: Final = """
@@ -127,6 +133,14 @@ class TimescaleAlertRepository:
         except psycopg.Error as error:
             raise AlertWriteError(str(error)) from error
         logger.info("stored %d alert events", len(planned))
+
+    async def purge_resolved(self, older_than: timedelta) -> int:
+        try:
+            async with self._pool.connection() as connection, connection.cursor() as cursor:
+                await cursor.execute(PURGE_RESOLVED_ALERTS, {"older_than": older_than})
+                return cursor.rowcount
+        except psycopg.Error as error:
+            raise AlertWriteError(str(error)) from error
 
 
 def _warn_unmatched(event: AlertEvent) -> None:
