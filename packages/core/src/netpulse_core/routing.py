@@ -1,7 +1,7 @@
 from collections.abc import Sequence
 from typing import Final
 
-from pydantic import Field, TypeAdapter, ValidationError
+from pydantic import Field, HttpUrl, TypeAdapter, ValidationError
 
 from netpulse_core.alerts import SEVERITY_RANK, AlertEvent, AlertEventKind
 from netpulse_core.anomaly import Metric, Severity
@@ -12,10 +12,10 @@ DEFAULT_ROUTE_KINDS: Final[tuple[AlertEventKind, ...]] = ("opened", "escalated",
 
 class AlertRoute(TelemetryModel):
     name: str = Field(min_length=1)
-    webhook_url: str | None = None
+    webhook_url: HttpUrl | None = None
     min_severity: Severity = "warning"
-    metrics: tuple[Metric, ...] | None = None
-    kinds: tuple[AlertEventKind, ...] = DEFAULT_ROUTE_KINDS
+    metrics: tuple[Metric, ...] | None = Field(default=None, min_length=1)
+    kinds: tuple[AlertEventKind, ...] = Field(default=DEFAULT_ROUTE_KINDS, min_length=1)
 
 
 type RoutedEvents = tuple[tuple[AlertRoute, tuple[AlertEvent, ...]], ...]

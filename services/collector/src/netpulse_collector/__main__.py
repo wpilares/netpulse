@@ -76,7 +76,7 @@ async def open_notifier(settings: CollectorSettings) -> AsyncIterator[AlertNotif
         return
     async with httpx2.AsyncClient(timeout=settings.request_timeout_seconds) as http:
         webhooks = {
-            route.name: WebhookAlertNotifier(http, route.webhook_url)
+            route.name: WebhookAlertNotifier(http, str(route.webhook_url))
             for route in routes
             if route.webhook_url is not None
         }

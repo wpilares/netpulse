@@ -73,6 +73,13 @@ def test_alert_payload_flattens_the_key_and_serializes_timestamps() -> None:
     }
 
 
+def test_alert_payload_omits_the_signal_count() -> None:
+    payload = alert_payload(OPENED.state.model_copy(update={"signals": 3}))
+
+    assert "signals" not in payload
+    assert "key" not in payload
+
+
 async def test_notify_posts_every_event_in_one_json_body() -> None:
     requests: list[httpx2.Request] = []
     notifier = _notifier(lambda _: httpx2.Response(202), requests)

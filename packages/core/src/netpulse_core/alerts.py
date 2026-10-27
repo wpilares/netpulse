@@ -120,7 +120,7 @@ def _confirm(
     pending = _seen(state, signal, now, severity=_highest(state.severity, signal.severity))
     if pending.signals < policy.open_after_signals:
         return None, pending
-    return "opened", pending.model_copy(update={"status": "open", "opened_at": now})
+    return "opened", pending.model_copy(update={"status": "open"})
 
 
 def _seen(
