@@ -87,8 +87,14 @@ def test_detection_defaults_match_the_core_models(monkeypatch: pytest.MonkeyPatc
         "DETECTION_WARMUP_SAMPLES",
         "DETECTION_WARNING_Z",
         "DETECTION_CRITICAL_Z",
+        "DETECTION_MIN_BPS_DELTA",
+        "DETECTION_MIN_SIGMA_BPS",
+        "DETECTION_MIN_SIGMA_RATE",
+        "DETECTION_DROP_RATE_FLOOR",
+        "DETECTION_ERROR_RATE_FLOOR",
         "ALERT_RESOLVE_AFTER_SECONDS",
         "ALERT_COOLDOWN_SECONDS",
+        "ALERT_OPEN_AFTER_SIGNALS",
         "ALERT_WEBHOOK_URL",
     ):
         monkeypatch.delenv(f"NETPULSE_COLLECTOR_{name}", raising=False)
@@ -98,8 +104,17 @@ def test_detection_defaults_match_the_core_models(monkeypatch: pytest.MonkeyPatc
     assert settings.detection_enabled is True
     assert settings.link_capacity_bps == 10_000_000
     assert settings.alert_webhook_url is None
-    assert settings.detection_config() == DetectionConfig()
+    assert settings.detection_config() == DetectionConfig(min_bps_delta=1_000_000.0)
     assert settings.alert_policy() == AlertPolicy()
+
+
+def test_throughput_floor_is_raised_above_the_core_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NETPULSE_COLLECTOR_DETECTION_MIN_BPS_DELTA", raising=False)
+
+    settings = CollectorSettings()
+
+    assert settings.detection_min_bps_delta == 1_000_000.0
+    assert settings.detection_min_bps_delta > DetectionConfig().min_bps_delta
 
 
 def test_detection_values_are_read_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -109,8 +124,14 @@ def test_detection_values_are_read_from_the_environment(monkeypatch: pytest.Monk
     monkeypatch.setenv("NETPULSE_COLLECTOR_DETECTION_WARMUP_SAMPLES", "3")
     monkeypatch.setenv("NETPULSE_COLLECTOR_DETECTION_WARNING_Z", "2.5")
     monkeypatch.setenv("NETPULSE_COLLECTOR_DETECTION_CRITICAL_Z", "4")
+    monkeypatch.setenv("NETPULSE_COLLECTOR_DETECTION_MIN_BPS_DELTA", "250000")
+    monkeypatch.setenv("NETPULSE_COLLECTOR_DETECTION_MIN_SIGMA_BPS", "20000")
+    monkeypatch.setenv("NETPULSE_COLLECTOR_DETECTION_MIN_SIGMA_RATE", "0.01")
+    monkeypatch.setenv("NETPULSE_COLLECTOR_DETECTION_DROP_RATE_FLOOR", "0.05")
+    monkeypatch.setenv("NETPULSE_COLLECTOR_DETECTION_ERROR_RATE_FLOOR", "0.001")
     monkeypatch.setenv("NETPULSE_COLLECTOR_ALERT_RESOLVE_AFTER_SECONDS", "30")
     monkeypatch.setenv("NETPULSE_COLLECTOR_ALERT_COOLDOWN_SECONDS", "45")
+    monkeypatch.setenv("NETPULSE_COLLECTOR_ALERT_OPEN_AFTER_SIGNALS", "2")
     monkeypatch.setenv("NETPULSE_COLLECTOR_ALERT_WEBHOOK_URL", "https://hooks.example.test/x")
 
     settings = CollectorSettings()
@@ -118,9 +139,19 @@ def test_detection_values_are_read_from_the_environment(monkeypatch: pytest.Monk
     assert settings.detection_enabled is False
     assert settings.link_capacity_bps == 1_000_000_000
     assert settings.detection_config() == DetectionConfig(
-        alpha=0.5, warmup_samples=3, warning_z=2.5, critical_z=4.0
+        alpha=0.5,
+        warmup_samples=3,
+        warning_z=2.5,
+        critical_z=4.0,
+        min_bps_delta=250_000.0,
+        min_sigma_bps=20_000.0,
+        min_sigma_rate=0.01,
+        drop_rate_floor=0.05,
+        error_rate_floor=0.001,
     )
-    assert settings.alert_policy() == AlertPolicy(resolve_after_seconds=30.0, cooldown_seconds=45.0)
+    assert settings.alert_policy() == AlertPolicy(
+        resolve_after_seconds=30.0, cooldown_seconds=45.0, open_after_signals=2
+    )
     assert str(settings.alert_webhook_url) == "https://hooks.example.test/x"
 
 
@@ -130,6 +161,29 @@ def test_empty_webhook_url_means_no_webhook(monkeypatch: pytest.MonkeyPatch) -> 
     settings = CollectorSettings()
 
     assert settings.alert_webhook_url is None
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("DETECTION_MIN_BPS_DELTA", "0"),
+        ("DETECTION_MIN_BPS_DELTA", "-1"),
+        ("DETECTION_MIN_SIGMA_BPS", "0"),
+        ("DETECTION_MIN_SIGMA_RATE", "0"),
+        ("DETECTION_DROP_RATE_FLOOR", "-0.1"),
+        ("DETECTION_DROP_RATE_FLOOR", "1.5"),
+        ("DETECTION_ERROR_RATE_FLOOR", "-0.1"),
+        ("DETECTION_ERROR_RATE_FLOOR", "1.5"),
+        ("ALERT_OPEN_AFTER_SIGNALS", "0"),
+    ],
+)
+def test_floors_and_confirmation_reject_out_of_range_values(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(f"NETPULSE_COLLECTOR_{name}", value)
+
+    with pytest.raises(ValidationError, match=name.lower()):
+        CollectorSettings()
 
 
 def test_critical_z_must_exceed_warning_z(monkeypatch: pytest.MonkeyPatch) -> None:

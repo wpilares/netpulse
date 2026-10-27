@@ -133,8 +133,12 @@ Detection and alert policy are collector settings. Compose maps each one from a 
 | `NETPULSE_COLLECTOR_DETECTION_ALPHA` | `0.2` | EWMA weight of the newest sample, in `(0, 1]` |
 | `NETPULSE_COLLECTOR_DETECTION_WARMUP_SAMPLES` | `12` | Samples a baseline needs before it scores (one minute at 5 s polling) |
 | `NETPULSE_COLLECTOR_DETECTION_WARNING_Z`, `NETPULSE_COLLECTOR_DETECTION_CRITICAL_Z` | `3`, `5` | z-score thresholds; critical must exceed warning |
+| `NETPULSE_COLLECTOR_DETECTION_MIN_BPS_DELTA` | `1000000` | Throughput change below this many bit/s never signals, whatever its z-score (1 Mbit/s; the core default is 100 kbit/s) |
+| `NETPULSE_COLLECTOR_DETECTION_MIN_SIGMA_BPS`, `NETPULSE_COLLECTOR_DETECTION_MIN_SIGMA_RATE` | `10000`, `0.005` | Sigma floors for throughput and rate z-scores, so a flat series cannot produce infinite scores |
+| `NETPULSE_COLLECTOR_DETECTION_DROP_RATE_FLOOR`, `NETPULSE_COLLECTOR_DETECTION_ERROR_RATE_FLOOR` | `0.02`, `0` | Absolute guards: a drop rate at or above the floor, or an error rate above it, signals at least warning regardless of the baseline |
 | `NETPULSE_COLLECTOR_ALERT_RESOLVE_AFTER_SECONDS` | `60` | An open alert with no signal for this long resolves |
 | `NETPULSE_COLLECTOR_ALERT_COOLDOWN_SECONDS` | `120` | Signals inside this window after a resolution are suppressed instead of reopening |
+| `NETPULSE_COLLECTOR_ALERT_OPEN_AFTER_SIGNALS` | `3` | Consecutive signals a key needs before its alert opens (15 s at 5 s polling); a gap resets the count |
 | `NETPULSE_COLLECTOR_ALERT_WEBHOOK_URL` | unset | Same as `COLLECTOR_ALERT_WEBHOOK_URL` above, which Compose maps onto it |
 
 The network's traffic and fault schedules use the same prefix convention (`NETPULSE_NETWORK_TRAFFIC_*`, `NETPULSE_NETWORK_FAULT_*`, including the `_SEED` variables that change the deterministic schedules); Compose maps the `NETWORK_*` variables above onto them.
@@ -200,7 +204,7 @@ Signals drive an alert lifecycle with one open alert per `(switch, port, metric)
 
 Every event is written to the `alerts` table and handed to the notifier: logging by default, a webhook POST (`{"events": [{"kind": "opened", "alert": {...}}]}`) when `COLLECTOR_ALERT_WEBHOOK_URL` is set. Opening is an upsert on the partial unique index over open alerts, so a retried cycle never duplicates a row, and open alerts survive collector restarts: the collector reloads them at startup, a still-active anomaly keeps refreshing the same row and a vanished one resolves after the policy window. Baselines are not persisted, so a restart re-enters the one-minute warm-up before scoring resumes. Acknowledging an alert is a user mark on the row and does not stop the lifecycle.
 
-Because the baseline is an EWMA, a sustained step in throughput is absorbed within a few samples: throughput alerts describe changes, not levels, and resolve on their own. That makes the iperf3 bursts themselves open short throughput alerts with the default thresholds; raise the z thresholds (`NETPULSE_COLLECTOR_DETECTION_WARNING_Z`, `NETPULSE_COLLECTOR_DETECTION_CRITICAL_Z`) to quiet them, or the `min_bps_delta` floor in `DetectionConfig`, which is not exposed as a setting yet. Rate alerts do not have this problem because the absolute floors keep them open while the port keeps dropping.
+Because the baseline is an EWMA, a sustained step in throughput is absorbed within a few samples: throughput alerts describe changes, not levels, and resolve on their own. That makes the iperf3 bursts themselves open short throughput alerts with the core defaults. The collector counters that in two ways: `NETPULSE_COLLECTOR_DETECTION_MIN_BPS_DELTA` ignores changes under 1 Mbit/s, and `NETPULSE_COLLECTOR_ALERT_OPEN_AFTER_SIGNALS` keeps a key pending until three consecutive samples signal, so a 10 s burst never opens an alert while a 30 s `host_down` still does. Raise the z thresholds (`NETPULSE_COLLECTOR_DETECTION_WARNING_Z`, `NETPULSE_COLLECTOR_DETECTION_CRITICAL_Z`) or the floor to quiet them further. Rate alerts do not have this problem because the absolute floors keep them open while the port keeps dropping.
 
 ### Data model
 

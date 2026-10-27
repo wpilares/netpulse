@@ -21,8 +21,14 @@ class CollectorSettings(ServiceSettings, env_prefix="NETPULSE_COLLECTOR_", env_i
     detection_warmup_samples: Annotated[int, Field(ge=1)] = 12
     detection_warning_z: Annotated[float, Field(gt=0)] = 3.0
     detection_critical_z: Annotated[float, Field(gt=0)] = 5.0
+    detection_min_bps_delta: Annotated[float, Field(gt=0)] = 1_000_000.0
+    detection_min_sigma_bps: Annotated[float, Field(gt=0)] = 10_000.0
+    detection_min_sigma_rate: Annotated[float, Field(gt=0)] = 0.005
+    detection_drop_rate_floor: Annotated[float, Field(ge=0, le=1)] = 0.02
+    detection_error_rate_floor: Annotated[float, Field(ge=0, le=1)] = 0.0
     alert_resolve_after_seconds: Annotated[float, Field(ge=0)] = 60.0
     alert_cooldown_seconds: Annotated[float, Field(ge=0)] = 120.0
+    alert_open_after_signals: Annotated[int, Field(ge=1)] = 3
     alert_webhook_url: HttpUrl | None = None
 
     @model_validator(mode="after")
@@ -42,10 +48,16 @@ class CollectorSettings(ServiceSettings, env_prefix="NETPULSE_COLLECTOR_", env_i
             warmup_samples=self.detection_warmup_samples,
             warning_z=self.detection_warning_z,
             critical_z=self.detection_critical_z,
+            min_bps_delta=self.detection_min_bps_delta,
+            min_sigma_bps=self.detection_min_sigma_bps,
+            min_sigma_rate=self.detection_min_sigma_rate,
+            drop_rate_floor=self.detection_drop_rate_floor,
+            error_rate_floor=self.detection_error_rate_floor,
         )
 
     def alert_policy(self) -> AlertPolicy:
         return AlertPolicy(
             resolve_after_seconds=self.alert_resolve_after_seconds,
             cooldown_seconds=self.alert_cooldown_seconds,
+            open_after_signals=self.alert_open_after_signals,
         )
