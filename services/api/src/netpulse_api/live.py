@@ -120,7 +120,7 @@ class LiveKpiBroadcaster:
         self._queue_size = queue_size
         self._clock = clock
         self._alerts = alerts
-        self._alert_cursor: datetime | None = None
+        self._alert_cursor: int | None = None
         self._open_alerts: dict[int, Alert] = {}
         self._subscriptions: set[Subscription] = set()
 
@@ -176,7 +176,7 @@ class LiveKpiBroadcaster:
             return None
         if not alerts:
             return None
-        self._alert_cursor = max(alert.updated_at for alert in alerts)
+        self._alert_cursor = max(alert.seq for alert in alerts)
         for alert in alerts:
             self._remember(alert)
         return AlertFrame(generated_at=self._clock(), alerts=tuple(alerts))
@@ -196,7 +196,7 @@ class LiveKpiBroadcaster:
     async def _changed_alerts(self, alerts: AlertsQuery) -> list[Alert]:
         if self._alert_cursor is None:
             return await alerts.fetch("open", limit=MAX_ALERT_LIMIT)
-        return await alerts.fetch_updated_since(self._alert_cursor)
+        return await alerts.fetch_after(self._alert_cursor, limit=MAX_ALERT_LIMIT)
 
     def _publish(self, frame: LiveFrame) -> LiveFrame:
         for subscription in list(self._subscriptions):

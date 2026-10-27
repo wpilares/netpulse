@@ -4,7 +4,12 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from netpulse_api.alerts import Alert, AlertStatusFilter, AlertsUnavailableError
+from netpulse_api.alerts import (
+    MAX_ALERT_LIMIT,
+    Alert,
+    AlertStatusFilter,
+    AlertsUnavailableError,
+)
 from netpulse_api.kpis import (
     KpiUnavailableError,
     SamplePair,
@@ -51,14 +56,14 @@ class ScriptedAlertsQuery:
     def __init__(self, *outcomes: AlertOutcome) -> None:
         self._outcomes = list(outcomes)
         self.snapshots: list[tuple[AlertStatusFilter, int]] = []
-        self.cursors: list[datetime] = []
+        self.cursors: list[tuple[int, int]] = []
 
     async def fetch(self, status: AlertStatusFilter, *, limit: int) -> list[Alert]:
         self.snapshots.append((status, limit))
         return self._next()
 
-    async def fetch_updated_since(self, since: datetime) -> list[Alert]:
-        self.cursors.append(since)
+    async def fetch_after(self, seq: int, *, limit: int = MAX_ALERT_LIMIT) -> list[Alert]:
+        self.cursors.append((seq, limit))
         return self._next()
 
     def _next(self) -> list[Alert]:
@@ -98,8 +103,10 @@ def _broadcaster(
     )
 
 
-def _updated(alert: Alert, *, minutes: int) -> Alert:
-    return alert.model_copy(update={"updated_at": alert.updated_at + timedelta(minutes=minutes)})
+def _updated(alert: Alert, *, seq: int) -> Alert:
+    return alert.model_copy(
+        update={"seq": seq, "updated_at": alert.updated_at + timedelta(minutes=seq)}
+    )
 
 
 async def _next_within_a_second(subscription: Subscription) -> LiveFrame:
@@ -252,13 +259,13 @@ async def test_no_alert_frame_when_nothing_changed(make_alert: MakeAlert) -> Non
 
     assert len(first) == 2
     assert second == (HeartbeatFrame(at=NOW),)
-    assert alerts.cursors == [alert.updated_at]
+    assert alerts.cursors == [(alert.seq, 500)]
 
 
 async def test_alert_cursor_advances_to_the_newest_update(make_alert: MakeAlert) -> None:
     opened = make_alert(1, "open")
-    refreshed = _updated(opened, minutes=3)
-    resolved = _updated(make_alert(2, "resolved"), minutes=5)
+    refreshed = _updated(opened, seq=3)
+    resolved = _updated(make_alert(2, "resolved"), seq=5)
     alerts = ScriptedAlertsQuery([opened], [resolved, refreshed], [])
     broadcaster = _broadcaster(ScriptedLatestSamplesQuery([], [], []), alerts=alerts)
 
@@ -268,7 +275,7 @@ async def test_alert_cursor_advances_to_the_newest_update(make_alert: MakeAlert)
 
     assert second[1] == AlertFrame(generated_at=NOW, alerts=(resolved, refreshed))
     assert alerts.snapshots == [("open", 500)]
-    assert alerts.cursors == [opened.updated_at, resolved.updated_at]
+    assert alerts.cursors == [(opened.seq, 500), (resolved.seq, 500)]
 
 
 async def test_snapshot_repeats_until_an_alert_exists(make_alert: MakeAlert) -> None:
@@ -282,7 +289,7 @@ async def test_snapshot_repeats_until_an_alert_exists(make_alert: MakeAlert) -> 
 
     assert (len(first), len(second), len(third)) == (1, 2, 1)
     assert alerts.snapshots == [("open", 500), ("open", 500)]
-    assert alerts.cursors == [alert.updated_at]
+    assert alerts.cursors == [(alert.seq, 500)]
 
 
 async def test_unavailable_alerts_are_skipped_and_retried(
@@ -304,7 +311,7 @@ async def test_unavailable_alerts_are_skipped_and_retried(
     assert third == (HeartbeatFrame(at=NOW),)
     assert "alert query failed" in caplog.text
     assert alerts.snapshots == [("open", 500), ("open", 500)]
-    assert alerts.cursors == [alert.updated_at]
+    assert alerts.cursors == [(alert.seq, 500)]
     assert [frame.type for frame in [await anext(subscription) for _ in range(4)]] == [
         "heartbeat",
         "heartbeat",
@@ -334,8 +341,8 @@ async def test_late_subscriber_receives_the_open_alert_snapshot(make_alert: Make
 
 async def test_snapshot_follows_resolved_and_reopened_alerts(make_alert: MakeAlert) -> None:
     first, second = make_alert(1, "open"), make_alert(2, "open")
-    resolved = _updated(make_alert(1, "resolved"), minutes=5)
-    third = _updated(make_alert(3, "open"), minutes=6)
+    resolved = _updated(make_alert(1, "resolved"), seq=5)
+    third = _updated(make_alert(3, "open"), seq=6)
     alerts = ScriptedAlertsQuery([first, second], [resolved, third])
     broadcaster = _broadcaster(ScriptedLatestSamplesQuery([], []), alerts=alerts)
 
@@ -348,7 +355,7 @@ async def test_snapshot_follows_resolved_and_reopened_alerts(make_alert: MakeAle
 
 async def test_subscriber_gets_no_snapshot_without_open_alerts(make_alert: MakeAlert) -> None:
     alerts = ScriptedAlertsQuery(
-        [make_alert(1, "open")], [_updated(make_alert(1, "resolved"), minutes=5)], []
+        [make_alert(1, "open")], [_updated(make_alert(1, "resolved"), seq=5)], []
     )
     broadcaster = _broadcaster(ScriptedLatestSamplesQuery([], [], []), queue_size=8, alerts=alerts)
     before_any_tick = broadcaster.subscribe()

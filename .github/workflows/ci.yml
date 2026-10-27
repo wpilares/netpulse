@@ -83,6 +83,7 @@ jobs:
           dbmate rollback
           dbmate rollback
           dbmate rollback
+          dbmate rollback
           dbmate up
       - name: Integration tests
         run: uv run pytest -m integration

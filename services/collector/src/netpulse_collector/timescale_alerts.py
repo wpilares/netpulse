@@ -24,19 +24,19 @@ UPSERT_OPEN_ALERT: Final = """
     ON CONFLICT (dpid, port_no, metric) WHERE status = 'open'
     DO UPDATE SET severity = EXCLUDED.severity, last_seen_at = EXCLUDED.last_seen_at,
         value = EXCLUDED.value, expected = EXCLUDED.expected, zscore = EXCLUDED.zscore,
-        updated_at = now()
+        updated_at = now(), seq = nextval('alerts_seq')
 """
 
 REFRESH_OPEN_ALERT: Final = """
     UPDATE alerts
     SET severity = %s, last_seen_at = %s, value = %s, expected = %s, zscore = %s,
-        updated_at = now()
+        updated_at = now(), seq = nextval('alerts_seq')
     WHERE dpid = %s::numeric AND port_no = %s AND metric = %s AND status = 'open'
 """
 
 RESOLVE_OPEN_ALERT: Final = """
     UPDATE alerts
-    SET status = 'resolved', resolved_at = %s, updated_at = now()
+    SET status = 'resolved', resolved_at = %s, updated_at = now(), seq = nextval('alerts_seq')
     WHERE dpid = %s::numeric AND port_no = %s AND metric = %s AND status = 'open'
 """
 

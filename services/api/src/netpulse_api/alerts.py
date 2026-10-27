@@ -20,6 +20,7 @@ class Alert(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     id: int
+    seq: int
     dpid: DatapathId
     port_no: PortNumber
     metric: Metric
@@ -52,7 +53,7 @@ class AlertList(BaseModel):
 class AlertsQuery(Protocol):
     async def fetch(self, status: AlertStatusFilter, *, limit: int) -> list[Alert]: ...
 
-    async def fetch_updated_since(self, since: AwareDatetime) -> list[Alert]: ...
+    async def fetch_after(self, seq: int, *, limit: int = MAX_ALERT_LIMIT) -> list[Alert]: ...
 
 
 class AlertCommand(Protocol):
