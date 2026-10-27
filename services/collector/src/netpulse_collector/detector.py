@@ -183,6 +183,7 @@ class DetectionObserver:
         self._notifier = notifier
         self._retention = retention
         self._baselines = baselines
+        self._pending_prunes: set[BaselineKey] = set()
         self._cycles = 0
 
     async def observe(self, report: PortStatsReport) -> None:
@@ -196,13 +197,31 @@ class DetectionObserver:
     async def _persist_baselines(self, result: ObservationResult) -> None:
         if self._baselines is None:
             return
+        self._pending_prunes.update(result.pruned_keys)
+        self._pending_prunes.difference_update(result.updated_baselines)
+        if result.updated_baselines:
+            await self._save_baselines(self._baselines, result.updated_baselines)
+        if self._pending_prunes:
+            await self._delete_pending_baselines(self._baselines)
+
+    async def _save_baselines(
+        self, repository: BaselineRepository, baselines: dict[BaselineKey, Baseline]
+    ) -> None:
         try:
-            if result.updated_baselines:
-                await self._baselines.save(result.updated_baselines)
-            if result.pruned_keys:
-                await self._baselines.delete(result.pruned_keys)
+            await repository.save(baselines)
         except AlertWriteError:
-            logger.exception("persisting baselines failed")
+            logger.exception("saving %d baselines failed", len(baselines))
+
+    async def _delete_pending_baselines(self, repository: BaselineRepository) -> None:
+        pending = tuple(sorted(self._pending_prunes))
+        try:
+            await repository.delete(pending)
+        except AlertWriteError:
+            logger.exception(
+                "deleting %d pruned baselines failed, retrying next cycle", len(pending)
+            )
+            return
+        self._pending_prunes.clear()
 
     async def _store(self, events: tuple[AlertEvent, ...]) -> None:
         try:

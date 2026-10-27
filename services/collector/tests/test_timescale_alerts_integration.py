@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import uuid
@@ -12,7 +13,7 @@ from psycopg.conninfo import make_conninfo
 from psycopg.rows import TupleRow
 from psycopg_pool import AsyncConnectionPool
 
-from netpulse_collector.timescale_alerts import TimescaleAlertRepository
+from netpulse_collector.timescale_alerts import LOCK_ALERT_SEQ, TimescaleAlertRepository
 from netpulse_core import AlertEvent, AlertEventKind, AlertKey, AlertState, Severity
 
 DATABASE_URL_VARIABLE = "NETPULSE_TEST_DATABASE_URL"
@@ -310,3 +311,39 @@ async def test_purge_resolved_deletes_only_old_resolved_alerts(pool: ConnectionP
     async with pool.connection() as connection:
         cursor = await connection.execute(SELECT_ALERTS, recent_key)
         assert [row[0] for row in await cursor.fetchall()] == ["resolved"]
+
+
+WAITING_ADVISORY_LOCKS = "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+
+
+async def _wait_for_a_lock_waiter(connection: psycopg.AsyncConnection[TupleRow]) -> None:
+    while True:
+        cursor = await connection.execute(WAITING_ADVISORY_LOCKS)
+        row = await cursor.fetchone()
+        if row is not None and row[0] == 1:
+            return
+        await asyncio.sleep(0.02)
+
+
+async def test_apply_waits_for_the_sequence_lock_held_by_another_writer(
+    pool: ConnectionPool,
+) -> None:
+    repository = TimescaleAlertRepository(pool)
+    other_key: AlertKey = (7, 3, "rx_bps")
+    other_opened = AlertEvent(
+        kind="opened", state=_event("opened").state.model_copy(update={"key": other_key})
+    )
+
+    async with pool.connection() as holder:
+        await holder.execute(LOCK_ALERT_SEQ)
+        cursor = await holder.execute("SELECT nextval('alerts_seq')")
+        held_row = await cursor.fetchone()
+        assert held_row is not None
+        held_seq = int(held_row[0])
+        blocked = asyncio.create_task(repository.apply([other_opened]))
+        await asyncio.wait_for(_wait_for_a_lock_waiter(holder), timeout=5)
+        assert not blocked.done()
+    await asyncio.wait_for(blocked, timeout=5)
+
+    ((_, other_seq),) = await _seqs(pool)
+    assert other_seq > held_seq

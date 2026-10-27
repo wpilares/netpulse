@@ -512,3 +512,92 @@ async def test_observer_logs_purge_failures_and_keeps_polling(
             await observer.observe(_report(cycle))
 
     assert "alerts table locked" in caplog.text
+
+
+class FlakyBaselineRepository:
+    def __init__(self, *, save_failures: int = 0, delete_failures: int = 0) -> None:
+        self._save_failures = save_failures
+        self._delete_failures = delete_failures
+        self.saved: list[dict[BaselineKey, Baseline]] = []
+        self.delete_attempts: list[tuple[BaselineKey, ...]] = []
+        self.deleted: list[tuple[BaselineKey, ...]] = []
+
+    async def load(self) -> dict[BaselineKey, Baseline]:
+        return {}
+
+    async def save(self, baselines: Mapping[BaselineKey, Baseline]) -> None:
+        if self._save_failures:
+            self._save_failures -= 1
+            raise AlertWriteError("baselines table unavailable")
+        self.saved.append(dict(baselines))
+
+    async def delete(self, keys: Iterable[BaselineKey]) -> None:
+        attempt = tuple(keys)
+        self.delete_attempts.append(attempt)
+        if self._delete_failures:
+            self._delete_failures -= 1
+            raise AlertWriteError("baselines table locked")
+        self.deleted.append(attempt)
+
+
+def _pruning_observer(baselines: FlakyBaselineRepository) -> DetectionObserver:
+    return DetectionObserver(
+        _detector(prune_after_cycles=1),
+        RecordingAlertRepository(),
+        RecordingAlertNotifier(),
+        baselines=baselines,
+    )
+
+
+async def _observe_until_port_two_is_pruned(observer: DetectionObserver) -> None:
+    await observer.observe(_report(1, ports=[_port(1, 1), _port(2, 1)]))
+    await observer.observe(_report(2, ports=[_port(1, 2), _port(2, 2)]))
+    await observer.observe(_report(3))
+    await observer.observe(_report(4))
+
+
+async def test_observer_retries_a_failed_prune_on_the_next_cycle(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    baselines = FlakyBaselineRepository(delete_failures=1)
+    observer = _pruning_observer(baselines)
+
+    with caplog.at_level(logging.ERROR, logger="netpulse_collector.detector"):
+        await _observe_until_port_two_is_pruned(observer)
+        await observer.observe(_report(5))
+        await observer.observe(_report(6))
+
+    assert [set(attempt) for attempt in baselines.delete_attempts] == [
+        _port_keys(2),
+        _port_keys(2),
+    ]
+    assert [set(deleted) for deleted in baselines.deleted] == [_port_keys(2)]
+    assert "baselines table locked" in caplog.text
+
+
+async def test_observer_forgets_pending_prunes_of_ports_that_came_back() -> None:
+    baselines = FlakyBaselineRepository(delete_failures=2)
+    observer = _pruning_observer(baselines)
+
+    await _observe_until_port_two_is_pruned(observer)
+    await observer.observe(_report(5, ports=[_port(1, 5), _port(2, 1)]))
+    await observer.observe(_report(6, ports=[_port(1, 6), _port(2, 2)]))
+    await observer.observe(_report(7, ports=[_port(1, 7), _port(2, 3)]))
+
+    assert len(baselines.delete_attempts) == 2
+    assert baselines.deleted == []
+    assert set(baselines.saved[-1]) == _port_keys(1) | _port_keys(2)
+
+
+async def test_observer_still_prunes_when_saving_baselines_fails(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    baselines = FlakyBaselineRepository(save_failures=10)
+    observer = _pruning_observer(baselines)
+
+    with caplog.at_level(logging.ERROR, logger="netpulse_collector.detector"):
+        await _observe_until_port_two_is_pruned(observer)
+
+    assert baselines.saved == []
+    assert [set(deleted) for deleted in baselines.deleted] == [_port_keys(2)]
+    assert "baselines table unavailable" in caplog.text

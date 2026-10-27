@@ -367,3 +367,24 @@ async def test_subscriber_gets_no_snapshot_without_open_alerts(make_alert: MakeA
 
     assert await _next_within_a_second(after_resolution) == HeartbeatFrame(at=NOW)
     assert (await _next_within_a_second(before_any_tick)).type == "heartbeat"
+
+
+async def test_a_full_page_resumes_from_its_last_seq_on_the_next_tick(
+    make_alert: MakeAlert,
+) -> None:
+    first = make_alert(1, "open")
+    page = [
+        _updated(make_alert(alert_id, "open"), seq=alert_id)
+        for alert_id in range(2, MAX_ALERT_LIMIT + 2)
+    ]
+    alerts = ScriptedAlertsQuery([first], page, [])
+    broadcaster = _broadcaster(ScriptedLatestSamplesQuery([], [], []), alerts=alerts)
+
+    await broadcaster.tick()
+    second = await broadcaster.tick()
+    third = await broadcaster.tick()
+
+    assert len(page) == MAX_ALERT_LIMIT
+    assert second[1] == AlertFrame(generated_at=NOW, alerts=tuple(page))
+    assert len(third) == 1
+    assert alerts.cursors == [(first.seq, MAX_ALERT_LIMIT), (page[-1].seq, MAX_ALERT_LIMIT)]

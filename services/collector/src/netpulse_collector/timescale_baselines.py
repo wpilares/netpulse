@@ -3,7 +3,7 @@ from collections.abc import Iterable, Mapping
 from typing import Final
 
 import psycopg
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from netpulse_collector.alerts import AlertReadError, AlertWriteError
 from netpulse_collector.timescale_repository import ConnectionPool
@@ -55,9 +55,9 @@ class TimescaleBaselineRepository:
             async with self._pool.connection() as connection, connection.cursor() as cursor:
                 await cursor.execute(SELECT_BASELINES)
                 rows = await cursor.fetchall()
-        except psycopg.Error as error:
+            return dict(stored_baseline(row) for row in rows)
+        except (psycopg.Error, ValidationError) as error:
             raise AlertReadError(type(error).__name__) from error
-        return dict(stored_baseline(row) for row in rows)
 
     async def save(self, baselines: Mapping[BaselineKey, Baseline]) -> None:
         rows = [baseline_parameters(key, baseline) for key, baseline in baselines.items()]
