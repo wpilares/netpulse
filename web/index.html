@@ -3,7 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>NetPulse</title>
+    <script>
+      (() => {
+        try {
+          const theme = window.localStorage.getItem("netpulse.theme");
+          if (theme === "light" || theme === "dark") {
+            document.documentElement.setAttribute("data-theme", theme);
+          }
+        } catch {
+          return;
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
