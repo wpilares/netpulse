@@ -9,9 +9,9 @@ Real-time SDN network monitoring platform: streaming telemetry, network KPIs, an
 
 NetPulse emulates a software-defined network with Mininet, controls it with an OS-Ken OpenFlow controller, collects per-port statistics, stores them in TimescaleDB, derives KPIs from the counters, scores every port against its own baseline, raises alerts and streams KPIs and alerts to a React dashboard over REST and WebSockets. The emulated network injects faults on a schedule so there is always something to detect.
 
-![NetPulse dashboard during a host-down fault: header badge with one open alert, network summary cards, an open critical drop_rate alert on switch 3 port 3 with observed value 1.0, a tree topology of three switches and four hosts labelled by IP address with links colored by utilization, and per-port receive and transmit throughput charts for the selected switch](docs/images/dashboard-alerts.png)
+![NetPulse dashboard right after a host-down fault: header badge with one critical alert, network summary cards, a single open critical drop_rate alert on switch 3 port 3 with its observed and expected values, z-score, opening time and an acknowledge button, a tree topology of three switches and four hosts labelled by IP address with links colored by utilization, and per-port receive and transmit throughput charts for the selected switch](docs/images/dashboard-alerts.png)
 
-> **Status: v0.4, anomaly detection and alerting.** The collector keeps an EWMA baseline per port and metric, opens, escalates and resolves alerts, the API lists, acknowledges and streams them, the dashboard shows them live, and the network alternates packet-loss and host-down faults every two minutes. Next is v0.5, alert tuning and correlation ([roadmap](#roadmap)).
+> **Status: v0.5, alert tuning, persistence and routing.** Alerts open only after three consecutive signals, so the iperf3 schedule no longer produces throughput noise; baselines survive collector restarts; the live feed follows a gapless sequence cursor; alert events are routed to webhooks by severity, metric and kind; resolved alerts are purged after a week. Next is v0.6, alert annotations, silence windows and correlation ([roadmap](#roadmap)).
 
 ## What the dashboard shows
 
@@ -38,8 +38,8 @@ flowchart LR
 
     network -- "OpenFlow 1.3 :6653" --> controller["controller<br/>OS-Ken app"]
     collector["collector<br/>poller + detector"] -- "GET /stats/ports" --> controller
-    collector -- "port_stats, alerts" --> db[("TimescaleDB")]
-    collector -. "POST events" .-> webhook["webhook<br/>(optional)"]
+    collector -- "port_stats, alerts, baselines" --> db[("TimescaleDB")]
+    collector -. "POST routed events" .-> webhook["webhooks<br/>(optional)"]
     migrate["migrate<br/>dbmate"] -- "DDL" --> db
     api["api<br/>FastAPI"] -- "SQL" --> db
     api -- "GET /topology" --> controller
@@ -47,17 +47,17 @@ flowchart LR
     web -- "/ws/telemetry" --> api
 ```
 
-Data flows left to right. The controller requests `OFPPortStatsRequest` from every connected switch on a fixed interval, keeps the latest sample per switch in memory, discovers inter-switch links with LLDP and hosts from ARP. The collector polls the controller's REST endpoint, validates the payload against the shared `netpulse-core` models, writes the whole cycle to TimescaleDB in one batch, computes the KPIs of the cycle against the previous one, scores them against per-port baselines and persists the resulting alert events in the same database. A one-shot `migrate` service applies the schema before the collector and API start. The API serves stored series, KPIs and alerts over REST, proxies the topology from the controller and pushes live KPIs and alert changes to the dashboard over a WebSocket. The collector and the API never talk to each other: the database is the contract.
+Data flows left to right. The controller requests `OFPPortStatsRequest` from every connected switch on a fixed interval, keeps the latest sample per switch in memory, discovers inter-switch links with LLDP and hosts from ARP. The collector polls the controller's REST endpoint, validates the payload against the shared `netpulse-core` models, writes the whole cycle to TimescaleDB in one batch, computes the KPIs of the cycle against the previous one, scores them against per-port baselines, persists the resulting alert events and the baselines in the same database and routes the events to webhooks. A one-shot `migrate` service applies the schema before the collector and API start. The API serves stored series, KPIs and alerts over REST, proxies the topology from the controller and pushes live KPIs and alert changes to the dashboard over a WebSocket. The collector and the API never talk to each other: the database is the contract.
 
 | Component | Path | Stack | Responsibility |
 | --- | --- | --- | --- |
-| Core | `packages/core` | pydantic 2, pydantic-settings | Shared typed telemetry models, KPI computation, anomaly detection, alert lifecycle and settings base |
+| Core | `packages/core` | pydantic 2, pydantic-settings | Shared typed telemetry models, KPI computation, anomaly detection, alert lifecycle, alert routing and settings base |
 | Network | `network` | Mininet, Open vSwitch, iperf3 | Emulated tree topology on shaped links, scheduled traffic between hosts, scheduled fault injection |
 | Controller | `services/controller` | OS-Ken 4 (Python 3.13) | Tracks switches, installs forwarding, discovers links with LLDP and hosts from ARP, polls port stats, serves stats and topology over REST |
-| Collector | `services/collector` | asyncio, httpx2, psycopg 3 | Polls the controller, validates samples, writes them idempotently with retry and backoff, scores every port against its EWMA baseline, persists alerts and notifies a webhook |
+| Collector | `services/collector` | asyncio, httpx2, psycopg 3 | Polls the controller, validates samples, writes them idempotently with retry and backoff, scores every port against its EWMA baseline, persists alerts and baselines, routes alert events to webhooks and purges old resolved alerts |
 | API | `services/api` | FastAPI, httpx2, psycopg 3, uvicorn | `/health`, port statistics, KPIs, topology, alerts and service info under `/api/v1`, `/ws/telemetry` WebSocket |
 | Web | `web` | Bun, Vite, React 19, TypeScript, Vitest, Biome | Live dashboard: KPI summary cards, alerts panel with acknowledge, topology graph, per-port throughput charts, reconnecting WebSocket client |
-| Database | `db/migrations` | TimescaleDB 2.30 on PostgreSQL 18, dbmate | Hypertable, continuous aggregate, policies and the `alerts` table as versioned SQL |
+| Database | `db/migrations` | TimescaleDB 2.30 on PostgreSQL 18, dbmate | Hypertable, continuous aggregate, policies, the `alerts` table with its sequence cursor and the `alert_baselines` table as versioned SQL |
 
 ### Design decisions
 
@@ -69,6 +69,7 @@ Recorded as ADRs in [`docs/adr`](docs/adr):
 | [0005](docs/adr/0005-dbmate-sql-migrations.md), [0006](docs/adr/0006-retention-compression-aggregates.md) | dbmate SQL migrations; chunking, compression, retention and the 1-minute aggregate |
 | [0007](docs/adr/0007-kpi-computation.md) | KPIs computed in core from consecutive samples, counter resets as `null` rates |
 | [0008](docs/adr/0008-anomaly-detection-and-alerting.md) | EWMA baselines with z-scores and floors, alert lifecycle, `alerts` table, cursor streaming, webhook notifier, fault injection and why `loss` and `host_down` leave different marks |
+| [0009](docs/adr/0009-alert-confirmation-persistence-and-routing.md) | Alerts confirmed by consecutive signals, floors as settings, `seq` cursor serialized by an advisory lock, baselines persisted every cycle, routing by severity, metric and kind, retention of resolved alerts |
 
 ## Run it locally
 
@@ -93,11 +94,12 @@ docker compose up --build
 | --- | --- |
 | a few seconds | The controller reports 3 switches and 4 directed links; `GET /api/v1/topology` returns 7 nodes and 6 edges, hosts labelled `10.0.0.1` to `10.0.0.4` once they have sent ARP; the KPI summary counts 8 physical ports |
 | 15 s and every 15 s | An iperf3 round starts; during rounds the 10 Mbit/s links reach `max_utilization` 1.0 and the summary throughput peaks around 46 Mbit/s |
-| about 60 s | Baselines finish warming up (12 samples at 5 s); the first alerts, usually `rx_bps`/`tx_bps` on the ports the iperf3 bursts cross, appear about 70 s after the collector started |
+| about 60 s | Baselines finish warming up (12 samples at 5 s) on a fresh database; a restart reloads the stored baselines and skips the warm-up. Scoring starts, but an alert needs three consecutive signals on top of that, so nothing opens before about 70 s plus the confirmation |
 | 90 s, then every 120 s | A fault starts and lasts 30 s; the network logs `*** Fault: ...` and `*** Fault cleared`, and `loss` and `host_down` alternate across the links |
-| during a `host_down` fault | A `critical` `drop_rate` alert with value `1.0` opens on the switch port facing the downed host within one poll, and resolves about a minute after the fault clears |
+| during a `host_down` fault | A `critical` `drop_rate` alert with value `1.0` opens on the switch port facing the downed host 16 to 18 s after the fault starts (three signals at 5 s polling), with `opened_at` at the first signal; it resolves about 65 s after the fault clears |
+| during a `loss` fault and iperf3 rounds | Usually nothing: `netem` loss only shows as a throughput deviation, and the 1 Mbit/s floor plus the confirmation keep the iperf3 steps and 20 % loss below the bar. The v0.5 smoke saw no throughput alert in ten minutes and at most one alert open at a time |
 
-Throughput alerts with the default thresholds also fire on the iperf3 bursts themselves, because every round is a step in the rate; the baseline absorbs the step within a few samples and the alerts resolve on their own. That is expected noise in the demo; see [anomaly detection](#anomaly-detection-and-alerts) for the knobs.
+To see throughput alerts again, lower `COLLECTOR_DETECTION_MIN_BPS_DELTA`, set `COLLECTOR_ALERT_OPEN_AFTER_SIGNALS=1` or raise `NETWORK_FAULT_LOSS_PERCENT`; see [anomaly detection](#anomaly-detection-and-alerts) for the knobs.
 
 ### Ports and settings
 
@@ -157,8 +159,8 @@ The `network` container runs Mininet and Open vSwitch, which need Linux network 
 
 | Fault | What the network does | What the counters show |
 | --- | --- | --- |
-| `loss` | Adds `NETWORK_FAULT_LOSS_PERCENT` (20 %) `netem` packet loss on both ends of the link, keeping its bandwidth shaping | Nothing in the drop counters: `netem` discards packets inside the queue discipline, after Open vSwitch has counted them as transmitted. The receiving side's throughput deviates, so it appears as `rx_bps`/`tx_bps` alerts |
-| `host_down` | Takes the host-side interface of a host link down; the switch port stays up and LLDP keeps the topology intact. Another host (a sibling behind the same switch when there is one) pins the downed host's MAC as a permanent neighbour entry and floods it with `ping -f` for the fault duration, then forgets the entry | The Linux veth driver counts every frame sent towards the downed peer in the switch port's `tx_dropped`; in the smoke run `s3-eth3` went from 0 to 2715 dropped frames in 30 s and `drop_rate` reached `1.0`, so a `critical` alert opened within 4 s of the fault |
+| `loss` | Adds `NETWORK_FAULT_LOSS_PERCENT` (20 %) `netem` packet loss on both ends of the link, keeping its bandwidth shaping | Nothing in the drop counters: `netem` discards packets inside the queue discipline, after Open vSwitch has counted them as transmitted. The receiving side's throughput deviates, which can show as `rx_bps`/`tx_bps` alerts when the deviation clears the 1 Mbit/s floor for three consecutive polls; with the defaults it usually does not |
+| `host_down` | Takes the host-side interface of a host link down; the switch port stays up and LLDP keeps the topology intact. Another host (a sibling behind the same switch when there is one) pins the downed host's MAC as a permanent neighbour entry and floods it with `ping -f` for the fault duration, then forgets the entry | The Linux veth driver counts every frame sent towards the downed peer in the switch port's `tx_dropped`; in the smoke runs `s3-eth3` went from 0 to 2715 dropped frames in 30 s and `drop_rate` reached `1.0` on the first poll, so a `critical` alert opens as soon as three polls have confirmed it |
 
 Switch-to-switch links only ever get `loss`, since a host must stay behind a `host_down` fault. The container logs `*** Fault: ...`, `*** Probe: ...` and `*** Fault cleared`, clears any active fault on shutdown, and `NETWORK_FAULT_ENABLED=false` disables injection.
 
@@ -186,33 +188,34 @@ A counter the switch reports as unsupported (`2^64 - 1`) is stored as `NULL` and
 
 ## Anomaly detection and alerts
 
-Detection runs in the collector on every poll and is pure code in `netpulse_core.anomaly` and `netpulse_core.alerts` ([ADR 0008](docs/adr/0008-anomaly-detection-and-alerting.md)). Each `(switch, port, metric)` keeps an EWMA mean and variance; after the warm-up every new value is scored before it updates the baseline.
+Detection runs in the collector on every poll and is pure code in `netpulse_core.anomaly`, `netpulse_core.alerts` and `netpulse_core.routing` ([ADR 0008](docs/adr/0008-anomaly-detection-and-alerting.md), [ADR 0009](docs/adr/0009-alert-confirmation-persistence-and-routing.md)). Each `(switch, port, metric)` keeps an EWMA mean and variance; after the warm-up every new value is scored before it updates the baseline.
 
 | Metric | Signal when | Floor |
 | --- | --- | --- |
-| `rx_bps`, `tx_bps` | `\|z\| >= 3` warning, `\|z\| >= 5` critical, and the deviation is at least `100 kbit/s` | sigma at least `10 kbit/s` |
+| `rx_bps`, `tx_bps` | `\|z\| >= 3` warning, `\|z\| >= 5` critical, and the deviation is at least `NETPULSE_COLLECTOR_DETECTION_MIN_BPS_DELTA` (1 Mbit/s) | sigma at least `10 kbit/s` |
 | `drop_rate` | the same z thresholds, or `drop_rate >= 0.02` (at least warning) | sigma at least `0.005` |
 | `error_rate` | the same z thresholds, or `error_rate > 0` (at least warning) | sigma at least `0.005` |
 
-`z = (value - mean) / max(sigma, floor)`. Counter resets skip scoring and do not touch the baseline. The sigma floors keep a flat series from producing infinite scores; the absolute guards keep quiet ports from alerting on noise and keep a port that drops packets alerting for as long as it drops.
+`z = (value - mean) / max(sigma, floor)`. Counter resets skip scoring and do not touch the baseline. The sigma floors keep a flat series from producing infinite scores; the absolute guards keep quiet ports from alerting on noise and keep a port that drops packets alerting for as long as it drops. Every floor is a `NETPULSE_COLLECTOR_DETECTION_*` setting (see [Ports and settings](#ports-and-settings)).
 
-Signals drive an alert lifecycle with one open alert per `(switch, port, metric)`:
+Signals drive an alert lifecycle with at most one pending or open alert per `(switch, port, metric)`:
 
 | Event | When | Effect |
 | --- | --- | --- |
-| `opened` | A signal arrives with no open alert and no cooldown in force | New row with `opened_at = last_seen_at`, the signal's severity, value, expected and z-score |
+| none (pending) | A signal arrives with no open alert and no cooldown in force, and fewer than `NETPULSE_COLLECTOR_ALERT_OPEN_AFTER_SIGNALS` (3) consecutive signals have been seen | Nothing persisted or notified; the key stays pending with the strongest severity seen so far, and one cycle without a signal forgets it |
+| `opened` | The third consecutive signal confirms a pending key | New row with `opened_at` at the first signal, the strongest severity seen, and the latest value, expected and z-score |
 | `refreshed` | A further signal of the same or lower severity | `last_seen_at`, value, expected and z-score updated; severity never drops while open |
 | `escalated` | A further signal of higher severity | As refreshed, plus severity raised to critical |
 | `resolved` | No signal for `NETPULSE_COLLECTOR_ALERT_RESOLVE_AFTER_SECONDS` (60 s) | `status = resolved`, `resolved_at` set |
-| `suppressed` | A signal within `NETPULSE_COLLECTOR_ALERT_COOLDOWN_SECONDS` (120 s) after a resolution | Nothing persisted; after the cooldown the next signal opens a new alert |
+| `suppressed` | A signal within `NETPULSE_COLLECTOR_ALERT_COOLDOWN_SECONDS` (120 s) after a resolution | Nothing persisted; after the cooldown the next signal starts a new pending key |
 
-Every event except `suppressed` is written to the `alerts` table, and every event is handed to the notifier: logging by default, or the alert routes below when any is configured. Opening is an upsert on the partial unique index over open alerts, so a retried cycle never duplicates a row, and open alerts survive collector restarts: the collector reloads them at startup, a still-active anomaly keeps refreshing the same row and a vanished one resolves after the policy window. Baselines are upserted into `alert_baselines` every cycle and reloaded at startup (the collector logs how many it loaded), so a restart resumes scoring without repeating the one-minute warm-up. Acknowledging an alert is a user mark on the row and does not stop the lifecycle.
+Every event except `suppressed` is written to the `alerts` table, and every event is handed to the [alert routes](#alert-routing-and-retention). Opening is an upsert on the partial unique index over open alerts, so a retried cycle never duplicates a row. Open alerts survive collector restarts: the collector reloads them at startup, a still-active anomaly keeps refreshing the same row and a vanished one resolves after the policy window. Baselines survive too: the collector upserts every baseline that changed in a cycle into `alert_baselines` and reloads them all at startup (logging `loaded N baselines`), so a restart resumes scoring without repeating the one-minute warm-up. A port absent for 60 cycles (five minutes) is forgotten: its open alerts are resolved and notified, its pending key is dropped and its baselines are deleted. Acknowledging an alert is a user mark on the row and does not stop the lifecycle.
 
-Because the baseline is an EWMA, a sustained step in throughput is absorbed within a few samples: throughput alerts describe changes, not levels, and resolve on their own. That makes the iperf3 bursts themselves open short throughput alerts with the core defaults. The collector counters that in two ways: `NETPULSE_COLLECTOR_DETECTION_MIN_BPS_DELTA` ignores changes under 1 Mbit/s, and `NETPULSE_COLLECTOR_ALERT_OPEN_AFTER_SIGNALS` keeps a key pending until three consecutive samples signal, so a 10 s burst never opens an alert while a 30 s `host_down` still does. Raise the z thresholds (`NETPULSE_COLLECTOR_DETECTION_WARNING_Z`, `NETPULSE_COLLECTOR_DETECTION_CRITICAL_Z`) or the floor to quiet them further. Rate alerts do not have this problem because the absolute floors keep them open while the port keeps dropping.
+Because the baseline is an EWMA, a sustained step in throughput is absorbed within a few samples: throughput alerts describe changes, not levels, and resolve on their own. With the core defaults the iperf3 bursts themselves would open short throughput alerts; the collector defaults counter that in two ways. `NETPULSE_COLLECTOR_DETECTION_MIN_BPS_DELTA` ignores changes under 1 Mbit/s, and `NETPULSE_COLLECTOR_ALERT_OPEN_AFTER_SIGNALS` keeps a key pending until three consecutive samples signal, so a 10 s burst (two samples) never opens an alert while a 30 s `host_down` (six samples) still does, 10 s later than it would without confirmation. Raise the z thresholds (`NETPULSE_COLLECTOR_DETECTION_WARNING_Z`, `NETPULSE_COLLECTOR_DETECTION_CRITICAL_Z`) or the floor to quiet them further, or set `NETPULSE_COLLECTOR_ALERT_OPEN_AFTER_SIGNALS=1` for the v0.4 behaviour. Rate alerts do not have this problem because the absolute floors keep them open while the port keeps dropping.
 
 ### Alert routing and retention
 
-Alert events leave the collector through routes. `COLLECTOR_ALERT_WEBHOOK_URL` defines a route named `default`, and `COLLECTOR_ALERT_ROUTES` adds any number of others as a JSON list:
+Alert events leave the collector through routes, matched in pure code (`netpulse_core.routing`) and delivered by the collector. `COLLECTOR_ALERT_WEBHOOK_URL` defines a route named `default` that receives `opened`, `escalated` and `resolved` events of every metric and severity, and `COLLECTOR_ALERT_ROUTES` adds any number of others as a JSON list:
 
 ```json
 [
@@ -222,9 +225,17 @@ Alert events leave the collector through routes. `COLLECTOR_ALERT_WEBHOOK_URL` d
 ]
 ```
 
-Each route takes a `name`, an optional `webhook_url`, a `min_severity` (`warning` by default, or `critical`), an optional `metrics` list (`rx_bps`, `tx_bps`, `drop_rate`, `error_rate`; all metrics when omitted) and an optional `kinds` list, which defaults to `opened`, `escalated` and `resolved`. A route with a `webhook_url` receives one POST per cycle with its matching events (`{"events": [{"kind": "opened", "alert": {...}}]}`); a route without one logs them. The same event can reach several routes, a failing route never blocks the others, and `refreshed` and `suppressed` events stay inside the collector unless a route lists them. With neither variable set, every event is logged.
+| Field | Required | Values | Meaning |
+| --- | --- | --- | --- |
+| `name` | yes | non-empty string | Route name used in the logs |
+| `webhook_url` | no | `http` or `https` URL | Destination; a route without one logs its events |
+| `min_severity` | no | `warning` (default), `critical` | Lowest alert severity the route accepts |
+| `metrics` | no | non-empty list of `rx_bps`, `tx_bps`, `drop_rate`, `error_rate` | Only these metrics; every metric when omitted |
+| `kinds` | no | non-empty list of `opened`, `refreshed`, `escalated`, `resolved`, `suppressed` | Only these event kinds; `opened`, `escalated` and `resolved` when omitted |
 
-The collector also deletes resolved alerts older than `COLLECTOR_ALERT_RETENTION_DAYS` (7 days) once every `NETPULSE_COLLECTOR_ALERT_RETENTION_EVERY_CYCLES` poll cycles (720, one hour at 5 s polling), logging how many rows it removed; open alerts are never touched.
+A route with a `webhook_url` receives one POST per cycle with its matching events (`{"events": [{"kind": "opened", "alert": {...}}]}`, where `alert` carries the REST fields minus `id`, `seq`, `acknowledged_at` and `updated_at`, and `dpid` is a JSON number); a route without one logs them. The same event can reach several routes, a failing route is logged without its URL and never blocks the others, and `refreshed` and `suppressed` events stay inside the collector unless a route lists them. An empty `metrics` or `kinds` list, or malformed JSON, stops the collector at startup rather than creating a route that matches nothing. With neither variable set, every event is logged.
+
+The collector also deletes resolved alerts older than `COLLECTOR_ALERT_RETENTION_DAYS` (7 days) once every `NETPULSE_COLLECTOR_ALERT_RETENTION_EVERY_CYCLES` poll cycles (720, one hour at 5 s polling), logging how many rows it removed; open alerts are never touched. The purge runs with detection, so `COLLECTOR_DETECTION_ENABLED=false` also switches it off.
 
 ### Data model
 
@@ -321,13 +332,13 @@ The socket pushes the same network summary as `GET /api/v1/kpis/summary`, plus p
 | Frame | Direction | When |
 | --- | --- | --- |
 | `{"type": "hello", "version": "..."}` | server to client | Once, right after the connection opens |
-| `{"type": "alerts", "generated_at": "...", "alerts": [...]}` | server to client | Right after `hello`, with every open alert, when any alert is open at connect time; afterwards once per cycle in which at least one alert was opened, refreshed, escalated, resolved or acknowledged since the previous cycle, carrying just those alerts, which the client upserts by `id` |
+| `{"type": "alerts", "generated_at": "...", "alerts": [...]}` | server to client | Right after `hello`, with every open alert, when any alert is open at connect time; afterwards once per cycle in which at least one alert was opened, refreshed, escalated, resolved or acknowledged since the previous cycle, carrying just those alerts, which the client upserts by `id`. An open alert is refreshed every cycle it keeps signalling, so expect one frame per cycle while an alert is open |
 | `{"type": "kpis", "generated_at": "...", "summary": {...}, "switches": [{"dpid", "generated_at", "ports": [...]}]}` | server to client | Every cycle in which at least one port has two samples in the window |
 | `{"type": "heartbeat", "at": "..."}` | server to client | Every cycle in which the window holds no sample pairs yet |
 | `{"type": "store_unavailable", "at": "..."}` | server to client | Every cycle in which the database cannot be queried |
 | `{"type": "ping"}` / `{"type": "pong"}` | client to server / reply | Keepalive; any other client message gets `{"type": "error", "reason": "unsupported message"}` |
 
-Alert changes are picked up by a `seq` cursor: every write takes the next value of the `alerts_seq` sequence, the broadcaster fetches rows with `seq` above the highest it has seen (at most 500 per cycle, in `seq` order) and advances the cursor. Every writer, the collector cycle and an acknowledgement alike, first takes the transaction-scoped advisory lock `pg_advisory_xact_lock(hashtext('alerts_seq'))`, so `seq` is assigned in commit order and no change ever commits with a `seq` below a cursor that has already moved past it; a reconnect still gets the full open snapshot.
+Alert changes are picked up by a `seq` cursor: every write takes the next value of the `alerts_seq` sequence, the broadcaster fetches rows with `seq` above the highest it has seen (at most 500 per cycle, in `seq` order) and advances the cursor. Every writer, the collector cycle and an acknowledgement alike, first takes the transaction-scoped advisory lock `pg_advisory_xact_lock(hashtext('alerts_seq'))`, so `seq` is assigned in commit order and no change ever commits with a `seq` below a cursor that has already moved past it ([ADR 0009](docs/adr/0009-alert-confirmation-persistence-and-routing.md)). More than 500 changes in one cycle are delivered over the following cycles, and a reconnect still gets the full open snapshot.
 
 Frames queue per client (`NETPULSE_API_LIVE_QUEUE_SIZE`, 16); a client that falls behind is disconnected with close code `1013` and reason `slow consumer`.
 
@@ -362,14 +373,14 @@ Quality bar: no code comments, no `any` or untyped Python, zero lint and type er
 
 ```
 .
-├── packages/core/           netpulse-core: telemetry models, KPI computation, anomaly detection, alert lifecycle, settings base
+├── packages/core/           netpulse-core: telemetry models, KPI computation, anomaly detection, alert lifecycle, alert routing, settings base
 ├── services/
 │   ├── api/                 FastAPI app, health probe, stats, KPI, alert, live and topology ports and adapters, routers, Dockerfile
-│   ├── collector/           polling loop, controller client, detector, repository and notifier ports, TimescaleDB and webhook adapters, Dockerfile
+│   ├── collector/           polling loop, controller client, detector, repository, baseline and notifier ports, TimescaleDB, routing and webhook adapters, Dockerfile
 │   └── controller/          standalone uv project: OS-Ken app, stats store, link and host discovery, REST, Dockerfile
 ├── network/                 Mininet topology spec, runner, traffic scheduler, fault injection, entrypoint, Dockerfile
 ├── web/                     React dashboard, nginx config, Dockerfile
-├── db/migrations/           dbmate SQL migrations: hypertable, continuous aggregate, policies, alerts table
+├── db/migrations/           dbmate SQL migrations: hypertable, continuous aggregate, policies, alerts and alert_baselines tables
 ├── docs/adr/                architecture decision records
 ├── docs/images/             dashboard screenshots
 ├── .github/workflows/ci.yml lint, type check, test and build on every push and PR
@@ -385,8 +396,9 @@ Quality bar: no code comments, no `any` or untyped Python, zero lint and type er
 | v0.1 | Base structure: every layer scaffolded, wired, typed, tested and containerized | Merged (PR #1) |
 | v0.2 | Telemetry ingestion: SQL migrations, `port_stats` hypertable with compression and retention, 1-minute continuous aggregate, idempotent batched writes with retry, stats query endpoint, integration tests in CI | Merged (PR #2) |
 | v0.3 | KPIs and live dashboard: KPI domain with counter-reset handling, history, switch and summary endpoints, WebSocket feed with heartbeat and backpressure, LLDP topology, live React dashboard, shaped links with scheduled iperf3 traffic | Merged (PR #3) |
-| v0.4 | Anomaly detection and alerting: EWMA baselines with z-scores and floors, alert lifecycle with escalation, resolution and cooldown, `alerts` table, list and acknowledge endpoints, alert frames over the WebSocket, webhook notifier, dashboard alerts panel, scheduled `loss` and `host_down` faults, hosts labelled by IP, OpenFlow port speed | Delivered on `feat/anomaly-alerting`, PR pending |
-| v0.5 | Alert tuning and routing (quieter throughput thresholds, silencing, per-severity destinations), baseline persistence across collector restarts, multi-metric and multi-port correlation | Next |
+| v0.4 | Anomaly detection and alerting: EWMA baselines with z-scores and floors, alert lifecycle with escalation, resolution and cooldown, `alerts` table, list and acknowledge endpoints, alert frames over the WebSocket, webhook notifier, dashboard alerts panel, scheduled `loss` and `host_down` faults, hosts labelled by IP, OpenFlow port speed | Merged (PR #4) |
+| v0.5 | Alert tuning, persistence and routing: alerts confirmed by consecutive signals, detection floors as settings with a 1 Mbit/s throughput floor, `seq` cursor serialized by an advisory lock, baselines persisted every cycle and reloaded at startup, alert routes by severity, metric and event kind, retention of resolved alerts, cleanup of vanished ports | Delivered on `feat/alert-tuning`, PR pending |
+| v0.6 | Alert annotations and silence windows, multi-metric and multi-port correlation, Grafana and Prometheus export | Next |
 
 ## License
 
