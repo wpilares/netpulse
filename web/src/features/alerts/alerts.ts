@@ -1,37 +1,24 @@
-import { isArrayOf, isOneOf, isRecord } from "../../lib/guards";
+import {
+  type Alert,
+  type AlertList,
+  type AlertMetric,
+  type AlertStatusFilter,
+  alertListSchema,
+  alertSchema,
+  parseWith,
+} from "../../api/schemas";
 import { formatBps, formatRate } from "../kpis/chart";
 
+export type {
+  Alert,
+  AlertList,
+  AlertMetric,
+  AlertStatus,
+  AlertStatusFilter,
+  Severity,
+} from "../../api/schemas";
+
 const ALERTS_PATH = "/api/v1/alerts";
-const ALERT_METRICS = ["rx_bps", "tx_bps", "drop_rate", "error_rate"] as const;
-const SEVERITIES = ["warning", "critical"] as const;
-const ALERT_STATUSES = ["open", "resolved"] as const;
-
-export type AlertMetric = (typeof ALERT_METRICS)[number];
-export type Severity = (typeof SEVERITIES)[number];
-export type AlertStatus = (typeof ALERT_STATUSES)[number];
-export type AlertStatusFilter = AlertStatus | "all";
-
-export interface Alert {
-  readonly id: number;
-  readonly dpid: number;
-  readonly port_no: number;
-  readonly metric: AlertMetric;
-  readonly severity: Severity;
-  readonly status: AlertStatus;
-  readonly opened_at: string;
-  readonly last_seen_at: string;
-  readonly resolved_at: string | null;
-  readonly acknowledged_at: string | null;
-  readonly value: number;
-  readonly expected: number;
-  readonly zscore: number;
-  readonly updated_at: string;
-}
-
-export interface AlertList {
-  readonly generated_at: string;
-  readonly alerts: readonly Alert[];
-}
 
 export interface AlertSummary {
   readonly open: number;
@@ -58,76 +45,9 @@ export interface FetchAlertsOptions {
   readonly signal?: AbortSignal;
 }
 
-const isNullableString = (value: unknown): value is string | null => value === null || typeof value === "string";
+export const parseAlert = parseWith(alertSchema);
 
-export const parseAlert = (value: unknown): Alert | null => {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const {
-    id,
-    dpid,
-    port_no,
-    metric,
-    severity,
-    status,
-    opened_at,
-    last_seen_at,
-    resolved_at,
-    acknowledged_at,
-    value: observed,
-    expected,
-    zscore,
-    updated_at,
-  } = value;
-  if (
-    typeof id !== "number" ||
-    typeof dpid !== "number" ||
-    typeof port_no !== "number" ||
-    !isOneOf(ALERT_METRICS, metric) ||
-    !isOneOf(SEVERITIES, severity) ||
-    !isOneOf(ALERT_STATUSES, status) ||
-    typeof opened_at !== "string" ||
-    typeof last_seen_at !== "string" ||
-    !isNullableString(resolved_at) ||
-    !isNullableString(acknowledged_at) ||
-    typeof observed !== "number" ||
-    typeof expected !== "number" ||
-    typeof zscore !== "number" ||
-    typeof updated_at !== "string"
-  ) {
-    return null;
-  }
-  return {
-    id,
-    dpid,
-    port_no,
-    metric,
-    severity,
-    status,
-    opened_at,
-    last_seen_at,
-    resolved_at,
-    acknowledged_at,
-    value: observed,
-    expected,
-    zscore,
-    updated_at,
-  };
-};
-
-const isAlert = (value: unknown): value is Alert => parseAlert(value) !== null;
-
-export const parseAlertList = (value: unknown): AlertList | null => {
-  if (!isRecord(value)) {
-    return null;
-  }
-  const { generated_at, alerts } = value;
-  if (typeof generated_at !== "string" || !isArrayOf(alerts, isAlert)) {
-    return null;
-  }
-  return { generated_at, alerts };
-};
+export const parseAlertList = parseWith(alertListSchema);
 
 const failureFor = (status: number): AlertRequestError => {
   if (status === 404) {
