@@ -2,7 +2,7 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import { App } from "./App";
 import { ApiError } from "./api/client";
-import type { Alert } from "./api/schemas";
+import type { Alert, AlertList } from "./api/schemas";
 import { makeAlert, makeAlertsFrame } from "./features/alerts/fixtures";
 import { createFakeSocket, FakeSocket } from "./features/telemetry/fakeSocket";
 import { makeKpiFrame, makePort, makeSnapshot } from "./features/telemetry/fixtures";
@@ -55,10 +55,34 @@ describe("App", () => {
     act(() => FakeSocket.at(0).open());
     await deliver(makeAlertsFrame([makeAlert({ id: 1, severity: "critical" })]));
 
-    expect(screen.getByText("1 alert").closest("output")).toHaveAttribute("data-tone", "critical");
+    const badge = await screen.findByText("1 alert", undefined, { timeout: 2000 });
+    expect(badge.closest("output")).toHaveAttribute("data-tone", "critical");
     expect(screen.getByRole("heading", { name: "Alerts" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Acknowledge" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Acknowledge" })).toBeInTheDocument();
     expect(screen.queryByText("No open alerts")).not.toBeInTheDocument();
+  });
+
+  it("keeps the live alerts when the REST list resolves after the first frame", async () => {
+    let respond: (list: AlertList) => void = () => undefined;
+    const apiClient = createFakeApiClient({
+      listAlerts: () =>
+        new Promise<AlertList>((resolve) => {
+          respond = resolve;
+        }),
+    });
+    renderApp(apiClient);
+    act(() => FakeSocket.at(0).open());
+    await deliver(makeAlertsFrame([makeAlert({ id: 1, severity: "critical" })]));
+    expect(await screen.findByText("1 alert", undefined, { timeout: 2000 })).toBeInTheDocument();
+
+    await act(async () => {
+      respond({ generated_at: "2026-10-26T10:00:00Z", alerts: [makeAlert({ id: 9, dpid: 9, port_no: 9 })] });
+    });
+
+    expect(await screen.findByText("1 alert", undefined, { timeout: 2000 })).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(screen.queryByText("Switch 9 · Port 9")).not.toBeInTheDocument();
+    expect(apiClient.listAlerts).toHaveBeenCalledTimes(1);
   });
 
   it("acknowledges an alert optimistically and rolls back when the API rejects it", async () => {

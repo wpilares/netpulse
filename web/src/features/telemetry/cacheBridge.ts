@@ -5,8 +5,8 @@ import { openAlerts, upsertAlerts } from "../alerts/alerts";
 
 const openKey = queryKeys.alerts("open");
 
-const applyKpiFrame = async (queryClient: QueryClient, frame: KpiFrame): Promise<void> => {
-  await queryClient.cancelQueries({ queryKey: queryKeys.kpiSummary });
+const applyKpiFrame = (queryClient: QueryClient, frame: KpiFrame): void => {
+  void queryClient.cancelQueries({ queryKey: queryKeys.kpiSummary });
   queryClient.setQueryData<KpiSnapshot>(queryKeys.kpiSummary, frame);
 };
 
@@ -15,21 +15,19 @@ const mergeAlerts = (current: AlertList | undefined, frame: AlertsFrame, alertsS
   return { generated_at: frame.generated_at, alerts: openAlerts(upsertAlerts(base, frame.alerts)) };
 };
 
-const applyAlertsFrame = async (queryClient: QueryClient, frame: AlertsFrame, alertsSynced: boolean): Promise<void> => {
-  await queryClient.cancelQueries({ queryKey: openKey });
+const applyAlertsFrame = (queryClient: QueryClient, frame: AlertsFrame, alertsSynced: boolean): void => {
+  void queryClient.cancelQueries({ queryKey: openKey });
   queryClient.setQueryData<AlertList>(openKey, (current) => mergeAlerts(current, frame, alertsSynced));
 };
 
-export const applyLiveFrame = async (
-  queryClient: QueryClient,
-  frame: LiveFrame,
-  alertsSynced: boolean,
-): Promise<void> => {
+export const applyLiveFrame = (queryClient: QueryClient, frame: LiveFrame, alertsSynced: boolean): void => {
   switch (frame.type) {
     case "kpis":
-      return applyKpiFrame(queryClient, frame);
+      applyKpiFrame(queryClient, frame);
+      return;
     case "alerts":
-      return applyAlertsFrame(queryClient, frame, alertsSynced);
+      applyAlertsFrame(queryClient, frame, alertsSynced);
+      return;
     case "hello":
     case "pong":
     case "error":
