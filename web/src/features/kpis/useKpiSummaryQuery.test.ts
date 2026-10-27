@@ -5,7 +5,7 @@ import { queryKeys } from "../../api/keys";
 import { createFakeApiClient } from "../../test/fakeApiClient";
 import { renderHookWithProviders } from "../../test/renderWithProviders";
 import { makePort, makeSnapshot } from "../telemetry/fixtures";
-import { useKpiSummaryQuery } from "./useKpiSummaryQuery";
+import { useKpiSummaryQuery, useKpiSummaryState } from "./useKpiSummaryQuery";
 
 describe("useKpiSummaryQuery", () => {
   it("is null until the REST summary arrives", async () => {
@@ -37,5 +37,30 @@ describe("useKpiSummaryQuery", () => {
     });
 
     await waitFor(() => expect(result.current).toEqual(live));
+  });
+});
+
+describe("useKpiSummaryState", () => {
+  it("moves from loading to ready", async () => {
+    const snapshot = makeSnapshot([makePort()]);
+    const apiClient = createFakeApiClient({ getKpiSummary: () => Promise.resolve(snapshot) });
+    const { result } = renderHookWithProviders(() => useKpiSummaryState(), { apiClient });
+
+    expect(result.current.status).toBe("loading");
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.snapshot).toEqual(snapshot);
+  });
+
+  it("is unavailable after a failed fetch and retries on demand", async () => {
+    const apiClient = createFakeApiClient({
+      getKpiSummary: () => Promise.reject(new ApiError("unavailable", "down", 503)),
+    });
+    const { result } = renderHookWithProviders(() => useKpiSummaryState(), { apiClient });
+
+    await waitFor(() => expect(result.current.status).toBe("unavailable"));
+
+    act(() => result.current.retry());
+
+    await waitFor(() => expect(apiClient.getKpiSummary).toHaveBeenCalledTimes(2));
   });
 });

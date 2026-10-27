@@ -1,0 +1,42 @@
+.canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.tick line {
+  stroke: var(--color-border);
+  stroke-width: 1;
+}
+
+.tick text,
+.axis text,
+.empty {
+  fill: var(--color-text-muted);
+  font-size: 10px;
+}
+
+.line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.line[data-series="rx"] {
+  stroke: var(--series-rx);
+}
+
+.line[data-series="tx"] {
+  stroke: var(--series-tx);
+}
+
+.cursor {
+  stroke: var(--color-text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.hit {
+  fill: transparent;
+}

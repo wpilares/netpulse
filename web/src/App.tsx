@@ -1,14 +1,15 @@
+import { AppShell } from "./app/AppShell";
 import { AlertsBadge } from "./components/AlertsBadge";
 import { ConnectionStatus } from "./components/ConnectionStatus";
 import { AlertsPanel } from "./features/alerts/AlertsPanel";
-import { useAlertsView } from "./features/alerts/useAlertsView";
+import { useAlertsQuery } from "./features/alerts/useAlertsQuery";
 import { ApiHealthStatus } from "./features/health/ApiHealthStatus";
-import { SummaryCards } from "./features/kpis/SummaryCards";
+import { useHealthQuery } from "./features/health/useHealthQuery";
+import { SummaryPanel } from "./features/kpis/SummaryPanel";
 import { SwitchPortsPanel } from "./features/kpis/SwitchPortsPanel";
 import { useKpiSummaryQuery } from "./features/kpis/useKpiSummaryQuery";
 import { useTelemetrySocket, type WebSocketLike } from "./features/telemetry/useTelemetrySocket";
-import { TopologyView } from "./features/topology/TopologyView";
-import { useTopologyQuery } from "./features/topology/useTopologyQuery";
+import { TopologyPanel } from "./features/topology/TopologyPanel";
 
 export interface AppProps {
   readonly createSocket?: (url: string) => WebSocketLike;
@@ -21,17 +22,13 @@ export const App = ({ createSocket, socketUrl }: AppProps) => {
     ...(socketUrl === undefined ? {} : { url: socketUrl }),
   });
   const snapshot = useKpiSummaryQuery();
-  const topology = useTopologyQuery();
-  const alerts = useAlertsView({ alertsSynced: socket.alertsSynced });
+  const health = useHealthQuery();
+  const { summary } = useAlertsQuery({ alertsSynced: socket.alertsSynced });
 
   return (
-    <div className="shell">
-      <header className="shell__header">
-        <div>
-          <h1 className="shell__title">NetPulse</h1>
-          <p className="shell__subtitle">Real-time SDN network monitoring</p>
-        </div>
-        <div className="shell__badges">
+    <AppShell
+      status={
+        <>
           <ApiHealthStatus />
           <ConnectionStatus
             status={socket.status}
@@ -39,27 +36,14 @@ export const App = ({ createSocket, socketUrl }: AppProps) => {
             storeUnavailable={socket.storeUnavailable}
             lastUpdateAt={snapshot?.generated_at ?? socket.lastHeartbeatAt ?? null}
           />
-          <AlertsBadge summary={alerts.summary} />
-        </div>
-      </header>
-      <main className="shell__main">
-        <section className="panel" aria-labelledby="summary-heading">
-          <h2 id="summary-heading">Network summary</h2>
-          <SummaryCards summary={snapshot?.summary ?? null} />
-        </section>
-        <section className="panel" aria-labelledby="alerts-heading">
-          <h2 id="alerts-heading">Alerts</h2>
-          <AlertsPanel {...alerts} />
-        </section>
-        <section className="panel" aria-labelledby="topology-heading">
-          <h2 id="topology-heading">Topology</h2>
-          <TopologyView state={topology} latest={snapshot} />
-        </section>
-        <section className="panel" aria-labelledby="ports-heading">
-          <h2 id="ports-heading">Switch ports</h2>
-          <SwitchPortsPanel latest={snapshot} history={socket.history} />
-        </section>
-      </main>
-    </div>
+          <AlertsBadge summary={summary} />
+        </>
+      }
+      version={health.kind === "online" ? health.report.version : null}
+      summary={<SummaryPanel />}
+      alerts={<AlertsPanel alertsSynced={socket.alertsSynced} />}
+      topology={<TopologyPanel />}
+      ports={<SwitchPortsPanel latest={snapshot} history={socket.history} />}
+    />
   );
 };

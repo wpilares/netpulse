@@ -68,13 +68,15 @@ describe("useAlertsQuery", () => {
     expect(result.current.resolved).toEqual({ kind: "hidden" });
     expect(apiClient.listAlerts).not.toHaveBeenCalled();
 
-    act(() => result.current.toggleResolved());
+    act(() => result.current.setFilter("resolved"));
+    expect(result.current.filter).toBe("resolved");
     expect(result.current.resolved).toEqual({ kind: "loading" });
 
     await waitFor(() => expect(result.current.resolved).toEqual({ kind: "ready", alerts: [resolved] }));
     expect(apiClient.listAlerts).toHaveBeenCalledWith({ status: "resolved", limit: 50 }, expect.any(AbortSignal));
 
-    act(() => result.current.toggleResolved());
+    act(() => result.current.setFilter("open"));
+    expect(result.current.filter).toBe("open");
     expect(result.current.resolved).toEqual({ kind: "hidden" });
   });
 
@@ -85,7 +87,7 @@ describe("useAlertsQuery", () => {
     });
     const { result } = renderAlerts(apiClient, true);
 
-    act(() => result.current.toggleResolved());
+    act(() => result.current.setFilter("resolved"));
 
     await waitFor(() =>
       expect(result.current.resolved).toEqual({ kind: "unavailable", reason: "Alert storage unavailable" }),

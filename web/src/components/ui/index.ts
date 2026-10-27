@@ -11,6 +11,7 @@ export {
   type CardTitleLevel,
   type CardTitleProps,
 } from "./Card";
+export { ChartFrame, type ChartFrameProps, type ChartSeries } from "./ChartFrame";
 export { type ClassValue, cx } from "./cx";
 export { EmptyState, type EmptyStateProps } from "./EmptyState";
 export { ErrorState, type ErrorStateProps } from "./ErrorState";

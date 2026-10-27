@@ -1,0 +1,89 @@
+.graph {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 24rem;
+}
+
+.edge {
+  stroke: var(--level-unknown);
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke var(--duration-base) var(--ease);
+}
+
+.edge[data-level="idle"] {
+  stroke: var(--level-idle);
+}
+
+.edge[data-level="low"] {
+  stroke: var(--level-low);
+}
+
+.edge[data-level="medium"] {
+  stroke: var(--level-medium);
+}
+
+.edge[data-level="high"] {
+  stroke: var(--level-high);
+}
+
+.edge[data-level="saturated"] {
+  stroke: var(--level-saturated);
+  stroke-width: 5;
+}
+
+.switch {
+  fill: var(--color-surface);
+  stroke: var(--color-text);
+  stroke-width: 2;
+}
+
+.host {
+  fill: var(--color-bg);
+  stroke: var(--color-text-muted);
+  stroke-width: 2;
+}
+
+.label {
+  fill: var(--color-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.swatch {
+  display: inline-block;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 2px;
+  background: var(--level-unknown);
+}
+
+.swatch[data-level="idle"] {
+  background: var(--level-idle);
+}
+
+.swatch[data-level="low"] {
+  background: var(--level-low);
+}
+
+.swatch[data-level="medium"] {
+  background: var(--level-medium);
+}
+
+.swatch[data-level="high"] {
+  background: var(--level-high);
+}
+
+.swatch[data-level="saturated"] {
+  background: var(--level-saturated);
+}
