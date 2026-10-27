@@ -1,3 +1,4 @@
+import asyncio
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
@@ -12,7 +13,7 @@ from psycopg.rows import TupleRow
 from psycopg_pool import AsyncConnectionPool
 
 from netpulse_api.alerts import Alert
-from netpulse_api.timescale_alerts import TimescaleAlertStore
+from netpulse_api.timescale_alerts import LOCK_ALERT_SEQ, TimescaleAlertStore
 from netpulse_core import AlertStatus, Metric
 
 DATABASE_URL_VARIABLE = "NETPULSE_TEST_DATABASE_URL"
@@ -205,3 +206,35 @@ async def test_acknowledge_is_visible_after_the_cursor(pool: ConnectionPool) -> 
     assert acknowledged is not None
     assert acknowledged.seq == 5
     assert changed == [acknowledged]
+
+
+WAITING_ADVISORY_LOCKS = "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND NOT granted"
+
+
+async def _wait_for_a_lock_waiter(connection: psycopg.AsyncConnection[TupleRow]) -> None:
+    while True:
+        cursor = await connection.execute(WAITING_ADVISORY_LOCKS)
+        row = await cursor.fetchone()
+        if row is not None and row[0] == 1:
+            return
+        await asyncio.sleep(0.02)
+
+
+async def test_acknowledge_waits_for_the_sequence_lock_held_by_the_collector(
+    pool: ConnectionPool,
+) -> None:
+    store = TimescaleAlertStore(pool)
+
+    async with pool.connection() as collector:
+        await collector.execute(LOCK_ALERT_SEQ)
+        cursor = await collector.execute("SELECT nextval('alerts_seq')")
+        held_row = await cursor.fetchone()
+        assert held_row is not None
+        held_seq = int(held_row[0])
+        blocked = asyncio.create_task(store.acknowledge(1, at=START + MINUTE * 10))
+        await asyncio.wait_for(_wait_for_a_lock_waiter(collector), timeout=5)
+        assert not blocked.done()
+    acknowledged = await asyncio.wait_for(blocked, timeout=5)
+
+    assert acknowledged is not None
+    assert acknowledged.seq > held_seq

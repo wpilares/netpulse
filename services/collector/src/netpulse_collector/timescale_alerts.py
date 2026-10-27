@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 type Statement = tuple[str, tuple[object, ...]]
 type OpenAlertRow = tuple[object, ...]
 
+LOCK_ALERT_SEQ: Final = "SELECT pg_advisory_xact_lock(hashtext('alerts_seq'))"
+
 UPSERT_OPEN_ALERT: Final = """
     INSERT INTO alerts (
         dpid, port_no, metric, severity, status,
@@ -126,6 +128,7 @@ class TimescaleAlertRepository:
             return
         try:
             async with self._pool.connection() as connection, connection.cursor() as cursor:
+                await cursor.execute(LOCK_ALERT_SEQ)
                 for event, (query, parameters) in planned:
                     await cursor.execute(query, parameters)
                     if event.kind != "opened" and cursor.rowcount == 0:

@@ -327,7 +327,7 @@ The socket pushes the same network summary as `GET /api/v1/kpis/summary`, plus p
 | `{"type": "store_unavailable", "at": "..."}` | server to client | Every cycle in which the database cannot be queried |
 | `{"type": "ping"}` / `{"type": "pong"}` | client to server / reply | Keepalive; any other client message gets `{"type": "error", "reason": "unsupported message"}` |
 
-Alert changes are picked up by a `seq` cursor: every write takes the next value of the `alerts_seq` sequence, the broadcaster fetches rows with `seq` above the highest it has seen (at most 500 per cycle, in `seq` order) and advances the cursor. The collector writes from one connection in one loop, so its `seq` order equals its commit order; an acknowledgement committed concurrently with a collector write can still take a lower `seq` than the one already broadcast, and a reconnect gets the full open snapshot, so the dashboard self-heals.
+Alert changes are picked up by a `seq` cursor: every write takes the next value of the `alerts_seq` sequence, the broadcaster fetches rows with `seq` above the highest it has seen (at most 500 per cycle, in `seq` order) and advances the cursor. Every writer, the collector cycle and an acknowledgement alike, first takes the transaction-scoped advisory lock `pg_advisory_xact_lock(hashtext('alerts_seq'))`, so `seq` is assigned in commit order and no change ever commits with a `seq` below a cursor that has already moved past it; a reconnect still gets the full open snapshot.
 
 Frames queue per client (`NETPULSE_API_LIVE_QUEUE_SIZE`, 16); a client that falls behind is disconnected with close code `1013` and reason `slow consumer`.
 

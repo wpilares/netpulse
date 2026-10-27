@@ -10,6 +10,7 @@ from psycopg.conninfo import make_conninfo
 from psycopg.rows import TupleRow
 from psycopg_pool import AsyncConnectionPool
 
+from netpulse_collector.alerts import AlertReadError
 from netpulse_collector.timescale_baselines import TimescaleBaselineRepository
 from netpulse_core import Baseline, BaselineKey
 
@@ -119,3 +120,32 @@ async def test_delete_removes_only_the_given_keys(pool: ConnectionPool) -> None:
     await repository.delete([])
 
     assert await repository.load() == {OTHER_KEY: kept}
+
+
+DROP_SAMPLES_CONSTRAINT = (
+    "ALTER TABLE alert_baselines DROP CONSTRAINT alert_baselines_samples_positive"
+)
+RESTORE_SAMPLES_CONSTRAINT = """
+    ALTER TABLE alert_baselines
+    ADD CONSTRAINT alert_baselines_samples_positive CHECK (samples >= 1)
+"""
+INSERT_UNSAMPLED_ROW = """
+    INSERT INTO alert_baselines (dpid, port_no, metric, mean, variance, samples)
+    VALUES (7, 3, 'tx_bps', 1.0, 1.0, 0)
+"""
+
+
+async def test_load_reports_rows_the_model_rejects_as_a_read_error(pool: ConnectionPool) -> None:
+    repository = TimescaleBaselineRepository(pool)
+    async with pool.connection() as connection:
+        await connection.execute(DROP_SAMPLES_CONSTRAINT)
+    try:
+        async with pool.connection() as connection:
+            await connection.execute(INSERT_UNSAMPLED_ROW)
+
+        with pytest.raises(AlertReadError, match="ValidationError"):
+            await repository.load()
+    finally:
+        async with pool.connection() as connection:
+            await connection.execute("DELETE FROM alert_baselines")
+            await connection.execute(RESTORE_SAMPLES_CONSTRAINT)

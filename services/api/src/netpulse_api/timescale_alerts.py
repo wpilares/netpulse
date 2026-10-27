@@ -12,6 +12,7 @@ from netpulse_api.timescale_stats import ConnectionPool
 
 logger = logging.getLogger(__name__)
 
+LOCK_ALERT_SEQ: Final = sql.SQL("SELECT pg_advisory_xact_lock(hashtext('alerts_seq'))")
 ALERT_COLUMNS: Final = sql.SQL(
     "id, seq, dpid, port_no, metric, severity, status, opened_at, last_seen_at, resolved_at, "
     "acknowledged_at, value, expected, zscore, updated_at"
@@ -62,15 +63,19 @@ class TimescaleAlertStore:
 
     async def acknowledge(self, alert_id: int, *, at: datetime) -> Alert | None:
         query = ACKNOWLEDGE_QUERY.format(columns=ALERT_COLUMNS)
-        rows = await self._fetch(query, {"alert_id": alert_id, "at": at})
+        rows = await self._fetch(query, {"alert_id": alert_id, "at": at}, lock_seq=True)
         return rows[0] if rows else None
 
-    async def _fetch(self, query: sql.Composed, parameters: Mapping[str, object]) -> list[Alert]:
+    async def _fetch(
+        self, query: sql.Composed, parameters: Mapping[str, object], *, lock_seq: bool = False
+    ) -> list[Alert]:
         try:
             async with (
                 self._pool.connection() as connection,
                 connection.cursor(row_factory=dict_row) as cursor,
             ):
+                if lock_seq:
+                    await cursor.execute(LOCK_ALERT_SEQ)
                 await cursor.execute(query, parameters)
                 rows = await cursor.fetchall()
         except psycopg.Error as error:
