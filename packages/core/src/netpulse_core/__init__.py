@@ -30,6 +30,14 @@ from netpulse_core.kpi import (
     port_samples,
     summarize_kpis,
 )
+from netpulse_core.routing import (
+    DEFAULT_ROUTE_KINDS,
+    AlertRoute,
+    RoutedEvents,
+    matches,
+    parse_routes,
+    route_events,
+)
 from netpulse_core.settings import LogLevel, ServiceSettings
 from netpulse_core.telemetry import (
     RESERVED_PORT_START,
@@ -42,12 +50,14 @@ from netpulse_core.telemetry import (
 )
 
 __all__ = [
+    "DEFAULT_ROUTE_KINDS",
     "METRICS",
     "RESERVED_PORT_START",
     "AlertEvent",
     "AlertEventKind",
     "AlertKey",
     "AlertPolicy",
+    "AlertRoute",
     "AlertState",
     "AlertStates",
     "AlertStatus",
@@ -66,6 +76,7 @@ __all__ = [
     "PortSample",
     "PortStats",
     "PortStatsReport",
+    "RoutedEvents",
     "ServiceSettings",
     "Severity",
     "SwitchPortStats",
@@ -73,7 +84,10 @@ __all__ = [
     "detect_port_anomalies",
     "evaluate_alerts",
     "is_reserved_port",
+    "matches",
+    "parse_routes",
     "port_samples",
+    "route_events",
     "score_metric",
     "summarize_kpis",
     "update_baseline",
