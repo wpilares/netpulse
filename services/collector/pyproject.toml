@@ -1,6 +1,6 @@
 [project]
 name = "netpulse-collector"
-version = "0.1.0"
+version = "1.0.0"
 description = "NetPulse telemetry collector polling the SDN controller"
 license = "MIT"
 requires-python = ">=3.14"
