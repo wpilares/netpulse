@@ -3,6 +3,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import HttpUrl
 
 from netpulse_collector.routing import RoutingAlertNotifier
 from netpulse_core import AlertEvent, AlertEventKind, AlertRoute, AlertState, Metric, Severity
@@ -30,8 +31,12 @@ def _event(kind: AlertEventKind, metric: Metric, severity: Severity) -> AlertEve
 OPENED_RX = _event("opened", "rx_bps", "warning")
 OPENED_DROPS = _event("opened", "drop_rate", "critical")
 REFRESHED_DROPS = _event("refreshed", "drop_rate", "critical")
-PAGER = AlertRoute(name="pager", webhook_url="https://pager.example.test", min_severity="critical")
-CHAT = AlertRoute(name="chat", webhook_url="https://chat.example.test", metrics=("rx_bps",))
+PAGER = AlertRoute(
+    name="pager", webhook_url=HttpUrl("https://pager.example.test"), min_severity="critical"
+)
+CHAT = AlertRoute(
+    name="chat", webhook_url=HttpUrl("https://chat.example.test"), metrics=("rx_bps",)
+)
 AUDIT = AlertRoute(name="audit", kinds=("refreshed",))
 
 

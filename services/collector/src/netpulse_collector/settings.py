@@ -74,5 +74,5 @@ class CollectorSettings(ServiceSettings, env_prefix="NETPULSE_COLLECTOR_", env_i
         configured = parse_routes(self.alert_routes)
         if self.alert_webhook_url is None:
             return configured
-        default = AlertRoute(name="default", webhook_url=str(self.alert_webhook_url))
+        default = AlertRoute(name="default", webhook_url=self.alert_webhook_url)
         return (default, *configured)

@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 import pytest
-from pydantic import ValidationError
+from pydantic import HttpUrl, ValidationError
 
 from netpulse_core.alerts import AlertEvent, AlertEventKind, AlertState
 from netpulse_core.anomaly import Metric, Severity
@@ -51,6 +51,24 @@ def test_route_defaults() -> None:
 def test_route_name_must_not_be_empty() -> None:
     with pytest.raises(ValidationError, match="name"):
         AlertRoute(name="")
+
+
+def test_route_metrics_must_not_be_empty() -> None:
+    with pytest.raises(ValidationError, match="metrics"):
+        AlertRoute(name="ops", metrics=())
+
+
+def test_route_kinds_must_not_be_empty() -> None:
+    with pytest.raises(ValidationError, match="kinds"):
+        AlertRoute(name="ops", kinds=())
+
+
+def test_route_webhook_url_is_validated_as_http() -> None:
+    route = AlertRoute(name="ops", webhook_url=HttpUrl("https://hooks.example.test/x"))
+
+    assert str(route.webhook_url) == "https://hooks.example.test/x"
+    with pytest.raises(ValidationError, match="webhook_url"):
+        AlertRoute.model_validate({"name": "ops", "webhook_url": "ftp://hooks.example.test"})
 
 
 @pytest.mark.parametrize(
@@ -132,7 +150,7 @@ def test_parse_routes_reads_a_json_array() -> None:
     )
 
     assert parse_routes(raw) == (
-        AlertRoute(name="pager", webhook_url="http://pager/hook", min_severity="critical"),
+        AlertRoute(name="pager", webhook_url=HttpUrl("http://pager/hook"), min_severity="critical"),
         AlertRoute(name="quality", metrics=("drop_rate",), kinds=("opened",)),
     )
 
@@ -150,6 +168,9 @@ def test_parse_routes_empty_input_is_no_routes(raw: str) -> None:
         '[{"name": ""}]',
         '[{"name": "ops", "min_severity": "fatal"}]',
         '[{"name": "ops", "metrics": ["latency"]}]',
+        '[{"name": "ops", "metrics": []}]',
+        '[{"name": "ops", "kinds": []}]',
+        '[{"name": "ops", "webhook_url": "not a url"}]',
         '[{"name": "ops", "extra": 1}]',
     ],
 )

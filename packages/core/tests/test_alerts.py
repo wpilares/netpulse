@@ -94,14 +94,20 @@ def test_invalid_policy_is_rejected(overrides: dict[str, float]) -> None:
         AlertPolicy.model_validate(overrides)
 
 
-@pytest.mark.parametrize(
-    ("status", "resolved_at"), [("open", T0), ("pending", T0), ("resolved", None)]
-)
+@pytest.mark.parametrize(("status", "resolved_at"), [("open", T0), ("resolved", None)])
 def test_state_requires_resolved_at_only_when_resolved(
     status: AlertStatus, resolved_at: datetime | None
 ) -> None:
     with pytest.raises(ValidationError, match="resolved_at"):
         _state(status=status, resolved_at=resolved_at)
+
+
+def test_pending_state_is_built_without_resolved_at() -> None:
+    pending = _state(status="pending", resolved_at=None, signals=2)
+
+    assert pending.status == "pending"
+    assert pending.resolved_at is None
+    assert pending.signals == 2
 
 
 def test_state_counts_at_least_one_signal() -> None:
@@ -127,7 +133,7 @@ def test_default_policy_opens_after_three_consecutive_signals() -> None:
     assert third == (AlertEvent(kind="opened", state=opened),)
     assert opened.status == "open"
     assert opened.signals == 3
-    assert opened.opened_at == _at(15)
+    assert opened.opened_at == _at(5)
     assert opened.last_seen_at == _at(15)
     assert opened.zscore == 4.5
     assert opened.resolved_at is None
@@ -194,7 +200,8 @@ def test_signal_after_cooldown_reenters_pending_before_reopening() -> None:
 
     assert [event.kind for event in events] == ["opened"]
     assert states[RX_KEY].status == "open"
-    assert states[RX_KEY].opened_at == _at(130)
+    assert states[RX_KEY].opened_at == _at(120)
+    assert states[RX_KEY].last_seen_at == _at(130)
 
 
 def test_signal_without_state_opens_alert() -> None:
@@ -230,6 +237,20 @@ def test_signal_refreshes_open_alert() -> None:
     assert refreshed.zscore == 3.5
     assert refreshed.severity == "warning"
     assert refreshed.status == "open"
+
+
+def test_signals_keep_counting_while_open() -> None:
+    states, refreshed = evaluate_alerts(
+        {RX_KEY: _state(signals=3)}, [_signal()], now=_at(10), policy=POLICY
+    )
+    assert [event.kind for event in refreshed] == ["refreshed"]
+    assert states[RX_KEY].signals == 4
+
+    states, escalated = evaluate_alerts(
+        states, [_signal(severity="critical")], now=_at(20), policy=POLICY
+    )
+    assert [event.kind for event in escalated] == ["escalated"]
+    assert states[RX_KEY].signals == 5
 
 
 def test_critical_signal_escalates_warning_alert() -> None:

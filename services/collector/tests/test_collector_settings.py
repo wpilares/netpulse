@@ -1,7 +1,7 @@
 import logging
 
 import pytest
-from pydantic import ValidationError
+from pydantic import HttpUrl, ValidationError
 
 from netpulse_collector.settings import CollectorSettings
 from netpulse_core import DEFAULT_ROUTE_KINDS, AlertPolicy, AlertRoute, DetectionConfig
@@ -225,7 +225,7 @@ def test_webhook_url_becomes_the_default_route(monkeypatch: pytest.MonkeyPatch) 
     settings = CollectorSettings()
 
     assert settings.routes() == (
-        AlertRoute(name="default", webhook_url="https://hooks.example.test/x"),
+        AlertRoute(name="default", webhook_url=HttpUrl("https://hooks.example.test/x")),
     )
     assert settings.routes()[0].kinds == DEFAULT_ROUTE_KINDS
 
@@ -242,10 +242,10 @@ def test_routes_are_parsed_after_the_default_route(monkeypatch: pytest.MonkeyPat
     settings = CollectorSettings()
 
     assert settings.routes() == (
-        AlertRoute(name="default", webhook_url="https://hooks.example.test/x"),
+        AlertRoute(name="default", webhook_url=HttpUrl("https://hooks.example.test/x")),
         AlertRoute(
             name="pager",
-            webhook_url="https://pager.example.test",
+            webhook_url=HttpUrl("https://pager.example.test"),
             min_severity="critical",
             metrics=("drop_rate",),
             kinds=("opened", "resolved"),
@@ -254,7 +254,16 @@ def test_routes_are_parsed_after_the_default_route(monkeypatch: pytest.MonkeyPat
     )
 
 
-@pytest.mark.parametrize("raw", ["not json", '{"name": "pager"}', '[{"webhook_url": "x"}]'])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "not json",
+        '{"name": "pager"}',
+        '[{"webhook_url": "x"}]',
+        '[{"name": "pager", "webhook_url": "not a url"}]',
+        '[{"name": "pager", "metrics": []}]',
+    ],
+)
 def test_invalid_routes_fail_at_settings_time(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
     monkeypatch.setenv("NETPULSE_COLLECTOR_ALERT_ROUTES", raw)
 
