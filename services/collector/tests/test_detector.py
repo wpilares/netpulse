@@ -67,9 +67,9 @@ def _detector(prune_after_cycles: int = 60) -> AnomalyDetector:
     )
 
 
-def _open_state(opened_at: datetime) -> AlertState:
+def _open_state(opened_at: datetime, *, port_no: int = 1) -> AlertState:
     return AlertState(
-        key=(1, 1, "rx_bps"),
+        key=(1, port_no, "rx_bps"),
         severity="warning",
         opened_at=opened_at,
         last_seen_at=opened_at,
@@ -194,6 +194,39 @@ def test_port_absent_longer_than_the_prune_window_restarts_its_warm_up() -> None
 
 def test_port_absent_within_the_prune_window_keeps_its_baseline() -> None:
     events = _observe_port_two_gap(prune_after_cycles=3, gap=3)
+
+    assert [(event.kind, event.state.key) for event in events] == [("opened", (1, 2, "rx_bps"))]
+
+
+def test_open_alert_of_a_pruned_port_is_resolved_once_and_forgotten() -> None:
+    detector = AnomalyDetector(
+        config=CONFIG,
+        policy=AlertPolicy(
+            resolve_after_seconds=3600.0, cooldown_seconds=3600.0, open_after_signals=1
+        ),
+        link_capacity_bps=10_000_000,
+        prune_after_cycles=1,
+    )
+    detector.observe_cycle(_report(1, ports=[_port(1, 1), _port(2, 1)]))
+    detector.seed([_open_state(T0 + timedelta(seconds=INTERVAL), port_no=2)])
+
+    within_window = detector.observe_cycle(_report(2))
+    past_window = detector.observe_cycle(_report(3))
+    after_prune = detector.observe_cycle(_report(4))
+
+    assert within_window.events == ()
+    assert [
+        (event.kind, event.state.key, event.state.resolved_at) for event in past_window.events
+    ] == [("resolved", (1, 2, "rx_bps"), T0 + timedelta(seconds=INTERVAL * 3))]
+    assert after_prune.events == ()
+
+    back = range(5, 5 + WARMUP + 1)
+    for cycle in back:
+        assert detector.observe(_report(cycle, ports=[_port(1, cycle), _port(2, cycle)])) == ()
+    spike = back.stop
+    events = detector.observe(
+        _report(spike, ports=[_port(1, spike), _port(2, spike, extra_rx_bytes=SPIKE_BYTES)])
+    )
 
     assert [(event.kind, event.state.key) for event in events] == [("opened", (1, 2, "rx_bps"))]
 
