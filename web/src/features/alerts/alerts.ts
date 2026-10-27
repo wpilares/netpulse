@@ -11,6 +11,8 @@ export type {
   Severity,
 } from "../../api/schemas";
 
+export type AlertFilter = "open" | "resolved";
+
 export interface AlertSummary {
   readonly open: number;
   readonly critical: number;

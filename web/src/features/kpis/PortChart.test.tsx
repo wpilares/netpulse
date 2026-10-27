@@ -12,8 +12,8 @@ describe("PortChart", () => {
     ];
     render(<PortChart portNo={1} points={points} />);
 
-    const chart = screen.getByRole("img", { name: /Port 1 throughput/ });
-    expect(chart.querySelectorAll("path.chart__line")).toHaveLength(2);
+    const chart = screen.getByRole("img", { name: /Port 1 throughput, 3 samples/ });
+    expect(chart.querySelectorAll("path[data-series]")).toHaveLength(2);
     expect(chart.querySelector('[data-series="rx"]')?.getAttribute("d")).toMatch(/^M.*M/);
     expect(screen.getByText("2.0 Mb/s", { selector: "strong" })).toBeInTheDocument();
     expect(screen.getByText("350.0 kb/s", { selector: "strong" })).toBeInTheDocument();
@@ -24,5 +24,6 @@ describe("PortChart", () => {
 
     expect(screen.getByRole("img", { name: /Port 2 throughput/ })).toBeInTheDocument();
     expect(screen.getByText("Waiting for samples")).toBeInTheDocument();
+    expect(screen.getAllByText("—", { selector: "strong" })).toHaveLength(2);
   });
 });

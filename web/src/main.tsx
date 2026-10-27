@@ -9,7 +9,6 @@ import { createQueryClient } from "./api/queryClient";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import "./styles/tokens.css";
 import "./styles/global.css";
-import "./styles.css";
 
 const container = document.getElementById("root");
 

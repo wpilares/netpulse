@@ -4,6 +4,7 @@ import type { ReactElement, ReactNode } from "react";
 import { ApiClientProvider } from "../api/ApiClientProvider";
 import type { ApiClient } from "../api/client";
 import { createQueryClient } from "../api/queryClient";
+import { ThemeProvider } from "../theme/ThemeProvider";
 import { createFakeApiClient } from "./fakeApiClient";
 
 export interface ProviderOptions {
@@ -24,9 +25,11 @@ export const createTestProviders = ({
   apiClient,
   queryClient,
   wrapper: ({ children }) => (
-    <QueryClientProvider client={queryClient}>
-      <ApiClientProvider client={apiClient}>{children}</ApiClientProvider>
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <ApiClientProvider client={apiClient}>{children}</ApiClientProvider>
+      </QueryClientProvider>
+    </ThemeProvider>
   ),
 });
 

@@ -1,15 +1,25 @@
 import { type PointerEvent, useState } from "react";
+import { ChartFrame, type ChartSeries } from "../../components/ui";
 import { formatClock } from "../../lib/time";
 import type { PortKpis } from "../telemetry/frames";
-import { type ChartFrame, formatBps, linePath, niceMax, seriesOf, type ThroughputField } from "./chart";
+import { type ChartFrame as ChartBounds, formatBps, linePath, niceMax, seriesOf, type ThroughputField } from "./chart";
+import styles from "./PortChart.module.css";
 
 const WIDTH = 320;
 const HEIGHT = 160;
 const MARGIN = { top: 12, right: 12, bottom: 22, left: 60 } as const;
 const PLOT = { width: WIDTH - MARGIN.left - MARGIN.right, height: HEIGHT - MARGIN.top - MARGIN.bottom } as const;
-const SERIES: readonly { readonly field: ThroughputField; readonly key: "rx" | "tx"; readonly label: string }[] = [
-  { field: "rx_bps", key: "rx", label: "Receive" },
-  { field: "tx_bps", key: "tx", label: "Transmit" },
+
+interface SeriesSpec {
+  readonly field: ThroughputField;
+  readonly key: "rx" | "tx";
+  readonly label: string;
+  readonly color: string;
+}
+
+const SERIES: readonly SeriesSpec[] = [
+  { field: "rx_bps", key: "rx", label: "Receive", color: "var(--series-rx)" },
+  { field: "tx_bps", key: "tx", label: "Transmit", color: "var(--series-tx)" },
 ];
 
 export interface PortChartProps {
@@ -23,13 +33,21 @@ const maxThroughput = (points: readonly PortKpis[]): number =>
 const nearestIndex = (ratio: number, count: number): number =>
   Math.min(count - 1, Math.max(0, Math.round(ratio * (count - 1))));
 
+const legendOf = (focused: PortKpis | undefined): readonly ChartSeries[] =>
+  SERIES.map((series) => ({
+    id: series.key,
+    label: series.label,
+    value: formatBps(focused?.[series.field] ?? null),
+    color: series.color,
+  }));
+
 export const PortChart = ({ portNo, points }: PortChartProps) => {
   const [hovered, setHovered] = useState<number | null>(null);
   const first = points[0];
   const last = points[points.length - 1];
   const label = `Port ${portNo} throughput, ${points.length} ${points.length === 1 ? "sample" : "samples"}`;
   const yMax = niceMax(maxThroughput(points));
-  const frame: ChartFrame = {
+  const bounds: ChartBounds = {
     width: PLOT.width,
     height: PLOT.height,
     xDomain: [Date.parse(first?.computed_at ?? ""), Date.parse(last?.computed_at ?? "")],
@@ -38,17 +56,21 @@ export const PortChart = ({ portNo, points }: PortChartProps) => {
   const focused = hovered === null ? last : (points[hovered] ?? last);
 
   const onPointerMove = (event: PointerEvent<SVGRectElement>) => {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    if (bounds.width === 0 || points.length === 0) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (rect.width === 0 || points.length === 0) {
       return;
     }
-    setHovered(nearestIndex((event.clientX - bounds.left) / bounds.width, points.length));
+    setHovered(nearestIndex((event.clientX - rect.left) / rect.width, points.length));
   };
 
   return (
-    <figure className="chart">
+    <ChartFrame
+      title="Throughput"
+      series={legendOf(focused)}
+      {...(focused === undefined ? {} : { caption: formatClock(focused.computed_at) })}
+    >
       <svg
-        className="chart__canvas"
+        className={styles.canvas}
         role="img"
         aria-label={label}
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
@@ -59,7 +81,7 @@ export const PortChart = ({ portNo, points }: PortChartProps) => {
           {[0, 0.5, 1].map((fraction) => {
             const y = PLOT.height - fraction * PLOT.height;
             return (
-              <g key={fraction} className="chart__tick">
+              <g key={fraction} className={styles.tick}>
                 <line x1={0} x2={PLOT.width} y1={y} y2={y} />
                 {points.length === 0 ? null : (
                   <text x={-8} y={y} textAnchor="end" dominantBaseline="central">
@@ -70,22 +92,22 @@ export const PortChart = ({ portNo, points }: PortChartProps) => {
             );
           })}
           {points.length === 0 ? (
-            <text className="chart__empty" x={PLOT.width / 2} y={PLOT.height / 2} textAnchor="middle">
+            <text className={styles.empty} x={PLOT.width / 2} y={PLOT.height / 2} textAnchor="middle">
               Waiting for samples
             </text>
           ) : (
             SERIES.map((series) => (
               <path
                 key={series.key}
-                className="chart__line"
+                className={styles.line}
                 data-series={series.key}
-                d={linePath(seriesOf(points, series.field), frame)}
+                d={linePath(seriesOf(points, series.field), bounds)}
               />
             ))
           )}
           {hovered !== null && focused !== undefined ? (
             <line
-              className="chart__cursor"
+              className={styles.cursor}
               x1={(hovered / Math.max(1, points.length - 1)) * PLOT.width}
               x2={(hovered / Math.max(1, points.length - 1)) * PLOT.width}
               y1={0}
@@ -93,7 +115,7 @@ export const PortChart = ({ portNo, points }: PortChartProps) => {
             />
           ) : null}
           {first !== undefined && last !== undefined ? (
-            <g className="chart__axis">
+            <g className={styles.axis}>
               <text x={0} y={PLOT.height + 16}>
                 {formatClock(first.computed_at)}
               </text>
@@ -103,7 +125,7 @@ export const PortChart = ({ portNo, points }: PortChartProps) => {
             </g>
           ) : null}
           <rect
-            className="chart__hit"
+            className={styles.hit}
             width={PLOT.width}
             height={PLOT.height}
             onPointerMove={onPointerMove}
@@ -111,16 +133,6 @@ export const PortChart = ({ portNo, points }: PortChartProps) => {
           />
         </g>
       </svg>
-      <figcaption className="chart__legend">
-        {SERIES.map((series) => (
-          <span key={series.key} className="chart__legend-item" data-series={series.key}>
-            <span className="chart__swatch" aria-hidden="true" />
-            <span>{series.label}</span>
-            <strong>{formatBps(focused?.[series.field] ?? null)}</strong>
-          </span>
-        ))}
-        {focused !== undefined ? <span className="chart__legend-time">{formatClock(focused.computed_at)}</span> : null}
-      </figcaption>
-    </figure>
+    </ChartFrame>
   );
 };

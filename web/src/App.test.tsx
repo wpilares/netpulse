@@ -1,5 +1,5 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { App } from "./App";
 import { ApiError } from "./api/client";
 import type { Alert, AlertList } from "./api/schemas";
@@ -18,9 +18,30 @@ const deliver = async (payload: unknown): Promise<void> => {
   });
 };
 
+const tileValue = (label: string): Element | null => screen.getByText(label).nextElementSibling;
+
 describe("App", () => {
   beforeEach(() => {
     FakeSocket.reset();
+  });
+
+  afterEach(() => {
+    localStorage.clear();
+    document.documentElement.removeAttribute("data-theme");
+  });
+
+  it("renders the shell landmarks, the four panels and the theme toggle", async () => {
+    renderApp();
+
+    const header = screen.getByRole("banner");
+    expect(within(header).getByRole("heading", { level: 1 })).toHaveTextContent("NetPulse");
+    expect(within(header).getByRole("radiogroup", { name: "Theme" })).toBeInTheDocument();
+    const main = screen.getByRole("main");
+    expect(within(main).getByRole("region", { name: "Network summary" })).toBeInTheDocument();
+    expect(within(main).getByRole("region", { name: "Alerts" })).toBeInTheDocument();
+    expect(within(main).getByRole("region", { name: "Topology" })).toBeInTheDocument();
+    expect(within(main).getByRole("region", { name: "Switch ports" })).toBeInTheDocument();
+    expect(await within(screen.getByRole("contentinfo")).findByText("API v1.0.0")).toBeInTheDocument();
   });
 
   it("paints the REST summary first, then follows live frames", async () => {
@@ -28,10 +49,10 @@ describe("App", () => {
       createFakeApiClient({ getKpiSummary: () => Promise.resolve(makeSnapshot([makePort({ rx_bps: 1_000_000 })])) }),
     );
 
-    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("NetPulse");
+    expect(screen.getByText("Loading network summary")).toBeInTheDocument();
     expect(await screen.findByText(/API online/)).toBeInTheDocument();
     await screen.findByText("1.0 Mb/s");
-    expect(screen.getByText("Inbound throughput").nextElementSibling).toHaveTextContent("1.0 Mb/s");
+    expect(tileValue("Inbound throughput")).toHaveTextContent("1.0 Mb/s");
     expect(await screen.findByRole("img", { name: /Network topology/ })).toBeInTheDocument();
     expect(screen.getByText("Connecting")).toBeInTheDocument();
 
@@ -39,11 +60,29 @@ describe("App", () => {
     await deliver(makeKpiFrame([makePort({ rx_bps: 3_000_000 })]));
 
     expect(screen.getByText("Live")).toBeInTheDocument();
-    await waitFor(() =>
-      expect(screen.getByText("Inbound throughput").nextElementSibling).toHaveTextContent("3.0 Mb/s"),
-    );
-    expect(screen.getByRole("button", { name: "Switch 1", pressed: true })).toBeInTheDocument();
+    await waitFor(() => expect(tileValue("Inbound throughput")).toHaveTextContent("3.0 Mb/s"));
+    expect(screen.getByRole("radio", { name: "Switch 1" })).toBeChecked();
     expect(screen.getByRole("img", { name: /Port 1 throughput/ })).toBeInTheDocument();
+  });
+
+  it("shows an error state with retry when the summary cannot be loaded", async () => {
+    let calls = 0;
+    const apiClient = createFakeApiClient({
+      getKpiSummary: () => {
+        calls += 1;
+        return calls === 1
+          ? Promise.reject(new ApiError("unavailable", "down", 503))
+          : Promise.resolve(makeSnapshot([makePort({ rx_bps: 5_000_000 })]));
+      },
+    });
+    renderApp(apiClient);
+
+    const summary = screen.getByRole("region", { name: "Network summary" });
+    expect(await within(summary).findByRole("alert")).toHaveTextContent("Network summary unavailable");
+
+    fireEvent.click(within(summary).getByRole("button", { name: "Retry" }));
+
+    expect(await within(summary).findByText("5.0 Mb/s")).toBeInTheDocument();
   });
 
   it("shows live alerts in the header badge and the alerts panel", async () => {
@@ -80,7 +119,7 @@ describe("App", () => {
     });
 
     expect(await screen.findByText("1 alert", undefined, { timeout: 2000 })).toBeInTheDocument();
-    expect(screen.getAllByRole("listitem")).toHaveLength(1);
+    expect(within(screen.getByRole("list", { name: "Open alerts" })).getAllByRole("listitem")).toHaveLength(1);
     expect(screen.queryByText("Switch 9 · Port 9")).not.toBeInTheDocument();
     expect(apiClient.listAlerts).toHaveBeenCalledTimes(1);
   });
@@ -112,7 +151,7 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: "Acknowledge" })).toBeEnabled();
   });
 
-  it("loads resolved alerts on demand", async () => {
+  it("loads resolved alerts on demand through the status filter", async () => {
     const resolved = makeAlert({ id: 9, status: "resolved", resolved_at: "2026-10-26T10:03:00Z" });
     const apiClient = createFakeApiClient({
       listAlerts: ({ status }) =>
@@ -121,7 +160,7 @@ describe("App", () => {
     renderApp(apiClient);
     expect(await screen.findByText("No open alerts")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Show resolved alerts" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Resolved" }));
 
     expect(await screen.findByRole("list", { name: "Resolved alerts" })).toBeInTheDocument();
     expect(apiClient.listAlerts).toHaveBeenCalledWith({ status: "resolved", limit: 50 }, expect.any(AbortSignal));

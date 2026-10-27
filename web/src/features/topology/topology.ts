@@ -39,6 +39,20 @@ export interface TopologyLayout {
 
 export type UtilizationLevel = "unknown" | "idle" | "low" | "medium" | "high" | "saturated";
 
+export interface UtilizationLegendEntry {
+  readonly level: UtilizationLevel;
+  readonly label: string;
+}
+
+export const UTILIZATION_LEGEND: readonly UtilizationLegendEntry[] = [
+  { level: "idle", label: "Idle" },
+  { level: "low", label: "< 30%" },
+  { level: "medium", label: "30–70%" },
+  { level: "high", label: "70–90%" },
+  { level: "saturated", label: "≥ 90%" },
+  { level: "unknown", label: "No data" },
+];
+
 export const parseTopology = parseWith(topologySchema);
 
 const compareNodes = (left: TopologyNode, right: TopologyNode): number => {

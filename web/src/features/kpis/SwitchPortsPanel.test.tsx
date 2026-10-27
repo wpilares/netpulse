@@ -15,27 +15,30 @@ describe("SwitchPortsPanel", () => {
   it("selects the lowest switch by default and lists its ports in order", () => {
     render(<SwitchPortsPanel latest={snapshot} history={history} />);
 
-    expect(screen.getByRole("button", { name: "Switch 1", pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Switch ports" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Switch 1" })).toBeChecked();
     expect(screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent)).toEqual(["Port 1"]);
   });
 
   it("switches the port list and highlights counter resets", () => {
     render(<SwitchPortsPanel latest={snapshot} history={history} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "Switch 2" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Switch 2" }));
 
-    expect(screen.getByRole("button", { name: "Switch 2", pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Switch 2" })).toBeChecked();
     expect(screen.getAllByRole("heading", { level: 3 }).map((heading) => heading.textContent)).toEqual([
       "Port 1",
       "Port 2",
     ]);
-    expect(screen.getByText("Counter reset")).toBeInTheDocument();
-    expect(screen.getByText("Counter reset").closest("article")).toHaveAttribute("data-reset", "true");
+    expect(screen.getByText("Counter reset")).toHaveAttribute("data-tone", "warning");
+    expect(screen.getByRole("region", { name: "Port 1" })).toHaveAttribute("data-reset", "true");
+    expect(screen.getByRole("region", { name: "Port 2" })).toHaveAttribute("data-reset", "false");
   });
 
   it("explains when no switch is reporting", () => {
     render(<SwitchPortsPanel latest={null} history={emptyHistory} />);
 
-    expect(screen.getByText(/No switches reporting yet/)).toBeInTheDocument();
+    expect(screen.getByText("No switches reporting yet")).toBeInTheDocument();
+    expect(screen.queryByRole("radiogroup")).not.toBeInTheDocument();
   });
 });
