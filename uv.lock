@@ -393,7 +393,7 @@ wheels = [
 
 [[package]]
 name = "netpulse"
-version = "0.1.0"
+version = "1.0.0"
 source = { virtual = "." }
 
 [package.dev-dependencies]
@@ -418,7 +418,7 @@ dev = [
 
 [[package]]
 name = "netpulse-api"
-version = "0.1.0"
+version = "1.0.0"
 source = { editable = "services/api" }
 dependencies = [
     { name = "fastapi" },
@@ -439,7 +439,7 @@ requires-dist = [
 
 [[package]]
 name = "netpulse-collector"
-version = "0.1.0"
+version = "1.0.0"
 source = { editable = "services/collector" }
 dependencies = [
     { name = "httpx2" },
@@ -456,7 +456,7 @@ requires-dist = [
 
 [[package]]
 name = "netpulse-core"
-version = "0.1.0"
+version = "1.0.0"
 source = { editable = "packages/core" }
 dependencies = [
     { name = "pydantic" },
@@ -471,7 +471,7 @@ requires-dist = [
 
 [[package]]
 name = "netpulse-network"
-version = "0.1.0"
+version = "1.0.0"
 source = { editable = "network" }
 
 [[package]]

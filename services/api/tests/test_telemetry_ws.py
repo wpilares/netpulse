@@ -54,7 +54,7 @@ def _live_client(
 
 def test_websocket_handshake_greets_the_client(make_client: MakeClient) -> None:
     with make_client(None).websocket_connect("/ws/telemetry") as websocket:
-        assert websocket.receive_json() == {"type": "hello", "version": "0.1.0"}
+        assert websocket.receive_json() == {"type": "hello", "version": "1.0.0"}
 
 
 def test_websocket_answers_pings(make_client: MakeClient) -> None:
@@ -79,7 +79,7 @@ def test_websocket_streams_kpi_frames_from_the_broadcaster(
     client, broadcaster = _live_client([make_sample_pair(1, 2)])
 
     with client.websocket_connect("/ws/telemetry") as websocket:
-        assert websocket.receive_json() == {"type": "hello", "version": "0.1.0"}
+        assert websocket.receive_json() == {"type": "hello", "version": "1.0.0"}
         assert broadcaster.subscriber_count == 1
         websocket.portal.call(broadcaster.tick)
 
@@ -151,7 +151,7 @@ def test_websocket_sends_the_open_alert_snapshot_right_after_hello(make_alert: M
         first.receive_json()
 
     with client.websocket_connect("/ws/telemetry") as websocket:
-        assert websocket.receive_json() == {"type": "hello", "version": "0.1.0"}
+        assert websocket.receive_json() == {"type": "hello", "version": "1.0.0"}
         snapshot = websocket.receive_json()
 
         assert snapshot["type"] == "alerts"
