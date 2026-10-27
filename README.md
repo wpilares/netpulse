@@ -9,9 +9,9 @@ Real-time SDN network monitoring platform: streaming telemetry, network KPIs, an
 
 NetPulse emulates a software-defined network with Mininet, controls it with an OS-Ken OpenFlow controller, collects per-port statistics, stores them in TimescaleDB, derives KPIs from the counters, scores every port against its own baseline, raises alerts and streams KPIs and alerts to a React dashboard over REST and WebSockets. The emulated network injects faults on a schedule so there is always something to detect.
 
-![NetPulse dashboard right after a host-down fault: header badge with one critical alert, network summary cards, a single open critical drop_rate alert on switch 3 port 3 with its observed and expected values, z-score, opening time and an acknowledge button, a tree topology of three switches and four hosts labelled by IP address with links colored by utilization, and per-port receive and transmit throughput charts for the selected switch](docs/images/dashboard-alerts.png)
+![The dashboard during a host-down fault: a critical drop_rate alert opens on switch 3 port 3, stays open while the port counts drops and resolves about a minute after the fault clears](docs/images/dashboard-fault.gif)
 
-> **Status: v0.5, alert tuning, persistence and routing.** Alerts open only after three consecutive signals, so the iperf3 schedule no longer produces throughput noise; baselines survive collector restarts; the live feed follows a gapless sequence cursor; alert events are routed to webhooks by severity, metric and kind; resolved alerts are purged after a week. Next is v0.6, alert annotations, silence windows and correlation ([roadmap](#roadmap)).
+> **Status: v1.0.0, project complete.** NetPulse runs end to end from an emulated network to a live dashboard: faults injected on a schedule show up as counter changes, become KPIs, are scored against per-port baselines, open confirmed alerts that are stored, routed to webhooks and streamed to the browser, and resolve on their own once the fault clears. Every milestone is listed in the [changelog](CHANGELOG.md); possible extensions are listed in the [roadmap](#roadmap) and not planned.
 
 ## What the dashboard shows
 
@@ -24,6 +24,8 @@ NetPulse emulates a software-defined network with Mininet, controls it with an O
 | Switch ports | `kpis` frames | Per-port utilization, drop and error rates, packet rates and a receive/transmit throughput chart over the last 120 frames (about ten minutes) |
 
 Charts and the topology graph are hand-rolled SVG with no chart library. The first frame comes from `GET /api/v1/kpis/summary` and the first alert list from `GET /api/v1/alerts`; after that the client follows the WebSocket, reconnects with exponential backoff (1 s doubling to 30 s plus jitter) and pings every 15 s to keep proxies from idling the socket out. Host labels fall back to the switch port name facing the host (`s2-eth2`) until the host has sent its first ARP frame.
+
+![The full dashboard page while a host-down fault is open: header badges for API and database reachability, live status and one critical alert; network summary cards with throughput, utilization, drop and error rates, switches, ports and counter resets; the alerts panel with a single critical drop_rate alert on switch 3 port 3 showing its value, expected value, z-score, opening time and an acknowledge button; the tree topology of three switches and four hosts labelled by IP address with links colored by utilization; and the receive and transmit throughput charts of the two ports of switch 1](docs/images/dashboard-alerts.png)
 
 ## Architecture
 
@@ -96,7 +98,7 @@ docker compose up --build
 | 15 s and every 15 s | An iperf3 round starts; during rounds the 10 Mbit/s links reach `max_utilization` 1.0 and the summary throughput peaks around 46 Mbit/s |
 | about 60 s | Baselines finish warming up (12 samples at 5 s) on a fresh database; a restart reloads the stored baselines and skips the warm-up. Scoring starts, but an alert needs three consecutive signals on top of that, so nothing opens before about 70 s plus the confirmation |
 | 90 s, then every 120 s | A fault starts and lasts 30 s; the network logs `*** Fault: ...` and `*** Fault cleared`, and `loss` and `host_down` alternate across the links |
-| during a `host_down` fault | A `critical` `drop_rate` alert with value `1.0` opens on the switch port facing the downed host 16 to 18 s after the fault starts (three signals at 5 s polling), with `opened_at` at the first signal; it resolves about 65 s after the fault clears |
+| during a `host_down` fault | A `critical` `drop_rate` alert with value `1.0` opens on the switch port facing the downed host 13 to 18 s after the fault starts (three signals at 5 s polling), with `opened_at` at the first signal; it resolves 63 to 66 s after the fault clears, as the GIF above shows |
 | during a `loss` fault and iperf3 rounds | Usually nothing: `netem` loss only shows as a throughput deviation, and the 1 Mbit/s floor plus the confirmation keep the iperf3 steps and 20 % loss below the bar. The v0.5 smoke saw no throughput alert in ten minutes and at most one alert open at a time |
 
 To see throughput alerts again, lower `COLLECTOR_DETECTION_MIN_BPS_DELTA`, set `COLLECTOR_ALERT_OPEN_AFTER_SIGNALS=1` or raise `NETWORK_FAULT_LOSS_PERCENT`; see [anomaly detection](#anomaly-detection-and-alerts) for the knobs.
@@ -393,12 +395,21 @@ Quality bar: no code comments, no `any` or untyped Python, zero lint and type er
 
 | Version | Scope | State |
 | --- | --- | --- |
-| v0.1 | Base structure: every layer scaffolded, wired, typed, tested and containerized | Merged (PR #1) |
-| v0.2 | Telemetry ingestion: SQL migrations, `port_stats` hypertable with compression and retention, 1-minute continuous aggregate, idempotent batched writes with retry, stats query endpoint, integration tests in CI | Merged (PR #2) |
-| v0.3 | KPIs and live dashboard: KPI domain with counter-reset handling, history, switch and summary endpoints, WebSocket feed with heartbeat and backpressure, LLDP topology, live React dashboard, shaped links with scheduled iperf3 traffic | Merged (PR #3) |
-| v0.4 | Anomaly detection and alerting: EWMA baselines with z-scores and floors, alert lifecycle with escalation, resolution and cooldown, `alerts` table, list and acknowledge endpoints, alert frames over the WebSocket, webhook notifier, dashboard alerts panel, scheduled `loss` and `host_down` faults, hosts labelled by IP, OpenFlow port speed | Merged (PR #4) |
-| v0.5 | Alert tuning, persistence and routing: alerts confirmed by consecutive signals, detection floors as settings with a 1 Mbit/s throughput floor, `seq` cursor serialized by an advisory lock, baselines persisted every cycle and reloaded at startup, alert routes by severity, metric and event kind, retention of resolved alerts, cleanup of vanished ports | Delivered on `feat/alert-tuning`, PR pending |
-| v0.6 | Alert annotations and silence windows, multi-metric and multi-port correlation, Grafana and Prometheus export | Next |
+| v0.1 | Base structure: every layer scaffolded, wired, typed, tested and containerized | Done ([PR #1](https://github.com/wpilares/netpulse/pull/1)) |
+| v0.2 | Telemetry ingestion: SQL migrations, `port_stats` hypertable with compression and retention, 1-minute continuous aggregate, idempotent batched writes with retry, stats query endpoint, integration tests in CI | Done ([PR #2](https://github.com/wpilares/netpulse/pull/2)) |
+| v0.3 | KPIs and live dashboard: KPI domain with counter-reset handling, history, switch and summary endpoints, WebSocket feed with heartbeat and backpressure, LLDP topology, live React dashboard, shaped links with scheduled iperf3 traffic | Done ([PR #3](https://github.com/wpilares/netpulse/pull/3)) |
+| v0.4 | Anomaly detection and alerting: EWMA baselines with z-scores and floors, alert lifecycle with escalation, resolution and cooldown, `alerts` table, list and acknowledge endpoints, alert frames over the WebSocket, webhook notifier, dashboard alerts panel, scheduled `loss` and `host_down` faults, hosts labelled by IP, OpenFlow port speed | Done ([PR #4](https://github.com/wpilares/netpulse/pull/4)) |
+| v0.5 | Alert tuning, persistence and routing: alerts confirmed by consecutive signals, detection floors as settings with a 1 Mbit/s throughput floor, `seq` cursor serialized by an advisory lock, baselines persisted every cycle and reloaded at startup, alert routes by severity, metric and event kind, retention of resolved alerts, cleanup of vanished ports | Done ([PR #5](https://github.com/wpilares/netpulse/pull/5)) |
+| v1.0 | Release: retention of resolved alerts independent of detection, every package at 1.0.0, changelog, dashboard GIF, roadmap closed | Done ([PR #6](https://github.com/wpilares/netpulse/pull/6)) |
+
+### Possible extensions
+
+Not planned; listed so the boundary of the project is explicit.
+
+- Alert annotations and silence windows: a user note on an alert and a time window in which a key does not open alerts.
+- Multi-metric and multi-port correlation: one alert for a fault that moves several metrics or both ends of a link.
+- Grafana or Prometheus export: a `/metrics` endpoint or a Grafana data source over the stored KPIs.
+- Switch-side drop faults via OpenFlow meters, which would need the controller to count meter drops because Open vSwitch does not report them in the port counters.
 
 ## License
 
