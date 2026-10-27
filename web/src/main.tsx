@@ -6,6 +6,9 @@ import { App } from "./App";
 import { ApiClientProvider } from "./api/ApiClientProvider";
 import { createApiClient } from "./api/client";
 import { createQueryClient } from "./api/queryClient";
+import { ThemeProvider } from "./theme/ThemeProvider";
+import "./styles/tokens.css";
+import "./styles/global.css";
 import "./styles.css";
 
 const container = document.getElementById("root");
@@ -19,11 +22,13 @@ const queryClient = createQueryClient();
 
 createRoot(container).render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <ApiClientProvider client={apiClient}>
-        <App />
-      </ApiClientProvider>
-      {import.meta.env.DEV ? <ReactQueryDevtools initialIsOpen={false} /> : null}
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <ApiClientProvider client={apiClient}>
+          <App />
+        </ApiClientProvider>
+        {import.meta.env.DEV ? <ReactQueryDevtools initialIsOpen={false} /> : null}
+      </QueryClientProvider>
+    </ThemeProvider>
   </StrictMode>,
 );
