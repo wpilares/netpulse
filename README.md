@@ -114,7 +114,9 @@ Variables read by Compose (`.env`):
 | `WEB_PORT`, `API_PORT`, `CONTROLLER_REST_PORT` | `3000`, `8000`, `8080` | Published host ports for the dashboard, API and controller REST |
 | `COLLECTOR_POLL_INTERVAL_SECONDS` | `5` | Collector poll period; Compose reuses it as `NETPULSE_API_LIVE_INTERVAL_SECONDS` for the WebSocket |
 | `COLLECTOR_REPOSITORY` | `timescale` | `log` only logs each cycle without a database |
-| `COLLECTOR_ALERT_WEBHOOK_URL` | unset | When set, the collector POSTs every batch of alert events to this URL as JSON and keeps the URL out of its logs; unset only logs them |
+| `COLLECTOR_ALERT_WEBHOOK_URL` | unset | When set, the collector POSTs each cycle's `opened`, `escalated` and `resolved` alert events to this URL as JSON (the `default` route) and keeps the URL out of its logs; unset and without routes it only logs them |
+| `COLLECTOR_ALERT_ROUTES` | unset | JSON list of extra alert routes filtered by severity, metric and event kind, see [Alert routing](#alert-routing-and-retention) |
+| `COLLECTOR_ALERT_RETENTION_DAYS` | `7` | Resolved alerts older than this are deleted by the collector once an hour |
 | `NETPULSE_API_LINK_CAPACITY_BPS` | `10000000` | Link capacity used for utilization by the API and the collector; unset makes utilization `null` |
 | `NETPULSE_API_LINK_CAPACITY_SOURCE` | `configured` | `openflow` makes the API use each port's OpenFlow `curr_speed` for utilization, falling back to the configured capacity for ports without one; on Mininet OVS reports the veth speed (10 Gbit/s), so leave it `configured` |
 | `NETWORK_LINK_BANDWIDTH_MBPS` | `10` | `TCLink` bandwidth of every emulated link; keep it equal to the API capacity |
@@ -140,6 +142,8 @@ Detection and alert policy are collector settings. Compose maps each one from a 
 | `NETPULSE_COLLECTOR_ALERT_COOLDOWN_SECONDS` | `120` | Signals inside this window after a resolution are suppressed instead of reopening |
 | `NETPULSE_COLLECTOR_ALERT_OPEN_AFTER_SIGNALS` | `3` | Consecutive signals a key needs before its alert opens (15 s at 5 s polling); a gap resets the count |
 | `NETPULSE_COLLECTOR_ALERT_WEBHOOK_URL` | unset | Same as `COLLECTOR_ALERT_WEBHOOK_URL` above, which Compose maps onto it |
+| `NETPULSE_COLLECTOR_ALERT_ROUTES` | unset | Same as `COLLECTOR_ALERT_ROUTES` above; malformed JSON stops the collector at startup |
+| `NETPULSE_COLLECTOR_ALERT_RETENTION_DAYS`, `NETPULSE_COLLECTOR_ALERT_RETENTION_EVERY_CYCLES` | `7`, `720` | Age after which resolved alerts are deleted, and how many poll cycles pass between purges (one hour at 5 s polling) |
 
 The network's traffic and fault schedules use the same prefix convention (`NETPULSE_NETWORK_TRAFFIC_*`, `NETPULSE_NETWORK_FAULT_*`, including the `_SEED` variables that change the deterministic schedules); Compose maps the `NETWORK_*` variables above onto them.
 
@@ -202,9 +206,25 @@ Signals drive an alert lifecycle with one open alert per `(switch, port, metric)
 | `resolved` | No signal for `NETPULSE_COLLECTOR_ALERT_RESOLVE_AFTER_SECONDS` (60 s) | `status = resolved`, `resolved_at` set |
 | `suppressed` | A signal within `NETPULSE_COLLECTOR_ALERT_COOLDOWN_SECONDS` (120 s) after a resolution | Nothing persisted; after the cooldown the next signal opens a new alert |
 
-Every event is written to the `alerts` table and handed to the notifier: logging by default, a webhook POST (`{"events": [{"kind": "opened", "alert": {...}}]}`) when `COLLECTOR_ALERT_WEBHOOK_URL` is set. Opening is an upsert on the partial unique index over open alerts, so a retried cycle never duplicates a row, and open alerts survive collector restarts: the collector reloads them at startup, a still-active anomaly keeps refreshing the same row and a vanished one resolves after the policy window. Baselines are not persisted, so a restart re-enters the one-minute warm-up before scoring resumes. Acknowledging an alert is a user mark on the row and does not stop the lifecycle.
+Every event except `suppressed` is written to the `alerts` table, and every event is handed to the notifier: logging by default, or the alert routes below when any is configured. Opening is an upsert on the partial unique index over open alerts, so a retried cycle never duplicates a row, and open alerts survive collector restarts: the collector reloads them at startup, a still-active anomaly keeps refreshing the same row and a vanished one resolves after the policy window. Baselines are not persisted, so a restart re-enters the one-minute warm-up before scoring resumes. Acknowledging an alert is a user mark on the row and does not stop the lifecycle.
 
 Because the baseline is an EWMA, a sustained step in throughput is absorbed within a few samples: throughput alerts describe changes, not levels, and resolve on their own. That makes the iperf3 bursts themselves open short throughput alerts with the core defaults. The collector counters that in two ways: `NETPULSE_COLLECTOR_DETECTION_MIN_BPS_DELTA` ignores changes under 1 Mbit/s, and `NETPULSE_COLLECTOR_ALERT_OPEN_AFTER_SIGNALS` keeps a key pending until three consecutive samples signal, so a 10 s burst never opens an alert while a 30 s `host_down` still does. Raise the z thresholds (`NETPULSE_COLLECTOR_DETECTION_WARNING_Z`, `NETPULSE_COLLECTOR_DETECTION_CRITICAL_Z`) or the floor to quiet them further. Rate alerts do not have this problem because the absolute floors keep them open while the port keeps dropping.
+
+### Alert routing and retention
+
+Alert events leave the collector through routes. `COLLECTOR_ALERT_WEBHOOK_URL` defines a route named `default`, and `COLLECTOR_ALERT_ROUTES` adds any number of others as a JSON list:
+
+```json
+[
+  {"name": "pager", "webhook_url": "https://pager.example.test/hook", "min_severity": "critical"},
+  {"name": "drops", "webhook_url": "https://chat.example.test/hook", "metrics": ["drop_rate", "error_rate"]},
+  {"name": "audit", "kinds": ["opened", "refreshed", "escalated", "resolved", "suppressed"]}
+]
+```
+
+Each route takes a `name`, an optional `webhook_url`, a `min_severity` (`warning` by default, or `critical`), an optional `metrics` list (`rx_bps`, `tx_bps`, `drop_rate`, `error_rate`; all metrics when omitted) and an optional `kinds` list, which defaults to `opened`, `escalated` and `resolved`. A route with a `webhook_url` receives one POST per cycle with its matching events (`{"events": [{"kind": "opened", "alert": {...}}]}`); a route without one logs them. The same event can reach several routes, a failing route never blocks the others, and `refreshed` and `suppressed` events stay inside the collector unless a route lists them. With neither variable set, every event is logged.
+
+The collector also deletes resolved alerts older than `COLLECTOR_ALERT_RETENTION_DAYS` (7 days) once every `NETPULSE_COLLECTOR_ALERT_RETENTION_EVERY_CYCLES` poll cycles (720, one hour at 5 s polling), logging how many rows it removed; open alerts are never touched.
 
 ### Data model
 

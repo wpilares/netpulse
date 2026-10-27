@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from netpulse_collector.settings import CollectorSettings
-from netpulse_core import AlertPolicy, DetectionConfig
+from netpulse_core import DEFAULT_ROUTE_KINDS, AlertPolicy, AlertRoute, DetectionConfig
 from netpulse_core.settings import HTTP_CLIENT_LOGGER, quiet_http_client_logging
 
 
@@ -206,3 +206,75 @@ def test_quiet_http_client_logging_hides_request_lines(caplog: pytest.LogCapture
         http_logger.setLevel(previous)
 
     assert [record.getMessage() for record in caplog.records] == ["HTTP Request: retrying"]
+
+
+def test_no_webhook_and_no_routes_means_no_routes(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("ALERT_WEBHOOK_URL", "ALERT_ROUTES"):
+        monkeypatch.delenv(f"NETPULSE_COLLECTOR_{name}", raising=False)
+
+    settings = CollectorSettings()
+
+    assert settings.alert_routes == ""
+    assert settings.routes() == ()
+
+
+def test_webhook_url_becomes_the_default_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NETPULSE_COLLECTOR_ALERT_WEBHOOK_URL", "https://hooks.example.test/x")
+    monkeypatch.delenv("NETPULSE_COLLECTOR_ALERT_ROUTES", raising=False)
+
+    settings = CollectorSettings()
+
+    assert settings.routes() == (
+        AlertRoute(name="default", webhook_url="https://hooks.example.test/x"),
+    )
+    assert settings.routes()[0].kinds == DEFAULT_ROUTE_KINDS
+
+
+def test_routes_are_parsed_after_the_default_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NETPULSE_COLLECTOR_ALERT_WEBHOOK_URL", "https://hooks.example.test/x")
+    monkeypatch.setenv(
+        "NETPULSE_COLLECTOR_ALERT_ROUTES",
+        '[{"name": "pager", "webhook_url": "https://pager.example.test", '
+        '"min_severity": "critical", "metrics": ["drop_rate"], "kinds": ["opened", "resolved"]}, '
+        '{"name": "audit"}]',
+    )
+
+    settings = CollectorSettings()
+
+    assert settings.routes() == (
+        AlertRoute(name="default", webhook_url="https://hooks.example.test/x"),
+        AlertRoute(
+            name="pager",
+            webhook_url="https://pager.example.test",
+            min_severity="critical",
+            metrics=("drop_rate",),
+            kinds=("opened", "resolved"),
+        ),
+        AlertRoute(name="audit"),
+    )
+
+
+@pytest.mark.parametrize("raw", ["not json", '{"name": "pager"}', '[{"webhook_url": "x"}]'])
+def test_invalid_routes_fail_at_settings_time(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    monkeypatch.setenv("NETPULSE_COLLECTOR_ALERT_ROUTES", raw)
+
+    with pytest.raises(ValidationError, match="alert routes must be a JSON array"):
+        CollectorSettings()
+
+
+def test_retention_defaults_to_a_week_checked_hourly(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("ALERT_RETENTION_DAYS", "ALERT_RETENTION_EVERY_CYCLES"):
+        monkeypatch.delenv(f"NETPULSE_COLLECTOR_{name}", raising=False)
+
+    settings = CollectorSettings()
+
+    assert settings.alert_retention_days == 7
+    assert settings.alert_retention_every_cycles == 720
+
+
+@pytest.mark.parametrize("name", ["ALERT_RETENTION_DAYS", "ALERT_RETENTION_EVERY_CYCLES"])
+def test_retention_values_must_be_at_least_one(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    monkeypatch.setenv(f"NETPULSE_COLLECTOR_{name}", "0")
+
+    with pytest.raises(ValidationError, match=name.lower()):
+        CollectorSettings()
