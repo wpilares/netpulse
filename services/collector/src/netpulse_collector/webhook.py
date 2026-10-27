@@ -14,7 +14,7 @@ def alert_payload(state: AlertState) -> dict[str, object]:
         "dpid": dpid,
         "port_no": port_no,
         "metric": metric,
-        **state.model_dump(mode="json", exclude={"key"}),
+        **state.model_dump(mode="json", exclude={"key", "signals"}),
     }
 
 
