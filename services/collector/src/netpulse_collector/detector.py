@@ -90,11 +90,12 @@ class AnomalyDetector:
                 port_signals, port_baselines = self._score(sample)
                 signals.extend(port_signals)
                 updated.update(port_baselines)
-        pruned = self._prune_vanished_ports(seen)
-        self._states, events = evaluate_alerts(
-            self._states, signals, now=self._report_time(report), policy=self._policy
-        )
-        return ObservationResult(events, updated, pruned)
+        now = self._report_time(report)
+        vanished = self._prune_vanished_ports(seen)
+        pruned = self._forget_baselines(vanished)
+        self._states, events = evaluate_alerts(self._states, signals, now=now, policy=self._policy)
+        resolved = self._forget_alerts(vanished, now)
+        return ObservationResult(events + resolved, updated, pruned)
 
     def _score(
         self, sample: PortSample
@@ -118,8 +119,8 @@ class AnomalyDetector:
         }
         return signals, updated
 
-    def _prune_vanished_ports(self, seen: set[PortKey]) -> tuple[BaselineKey, ...]:
-        pruned: list[BaselineKey] = []
+    def _prune_vanished_ports(self, seen: set[PortKey]) -> frozenset[PortKey]:
+        vanished: set[PortKey] = set()
         for key in list(self._samples):
             if key in seen:
                 self._absent_cycles.pop(key, None)
@@ -130,10 +131,26 @@ class AnomalyDetector:
                 continue
             del self._samples[key]
             del self._absent_cycles[key]
-            for baseline_key in _baseline_keys(key):
-                if self._baselines.pop(baseline_key, None) is not None:
-                    pruned.append(baseline_key)
-        return tuple(pruned)
+            vanished.add(key)
+        return frozenset(vanished)
+
+    def _forget_baselines(self, vanished: frozenset[PortKey]) -> tuple[BaselineKey, ...]:
+        return tuple(
+            baseline_key
+            for port in sorted(vanished)
+            for baseline_key in _baseline_keys(port)
+            if self._baselines.pop(baseline_key, None) is not None
+        )
+
+    def _forget_alerts(self, vanished: frozenset[PortKey], now: datetime) -> tuple[AlertEvent, ...]:
+        resolved: list[AlertEvent] = []
+        for key in sorted(key for key in self._states if (key[0], key[1]) in vanished):
+            state = self._states.pop(key)
+            if state.status != "open":
+                continue
+            closed = state.model_copy(update={"status": "resolved", "resolved_at": now})
+            resolved.append(AlertEvent(kind="resolved", state=closed))
+        return tuple(resolved)
 
     def _report_time(self, report: PortStatsReport) -> datetime:
         collected = [switch.collected_at for switch in report.switches]

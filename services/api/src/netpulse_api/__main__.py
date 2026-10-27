@@ -21,6 +21,7 @@ from netpulse_api.timescale_alerts import TimescaleAlertStore
 from netpulse_api.timescale_kpis import TimescaleKpiHistoryQuery, TimescaleLatestSamplesQuery
 from netpulse_api.timescale_stats import ConnectionPool, TimescalePortStatsQuery
 from netpulse_api.topology import TopologyQuery
+from netpulse_core.settings import quiet_http_client_logging
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,7 @@ def build_app(settings: ApiSettings) -> FastAPI:
 def main() -> None:
     settings = ApiSettings()
     logging.basicConfig(level=settings.log_level)
-    logging.getLogger("httpx2").setLevel(logging.WARNING)
+    quiet_http_client_logging()
     uvicorn.run(
         build_app(settings),
         host=settings.host,
