@@ -154,7 +154,7 @@ export const useTelemetrySocket = ({
         if (frame === null) {
           return;
         }
-        void applyLiveFrame(queryClient, frame, alertsSynced);
+        applyLiveFrame(queryClient, frame, alertsSynced);
         if (frame.type === "alerts") {
           alertsSynced = true;
         }
