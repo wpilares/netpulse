@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+from collections.abc import Sequence
 from typing import Protocol
 
 import httpx2
@@ -24,13 +25,20 @@ class PortStatsObserver(Protocol):
 async def poll_once(
     source: PortStatsSource,
     repository: PortStatsRepository,
-    observer: PortStatsObserver | None = None,
+    observers: Sequence[PortStatsObserver] = (),
 ) -> PortStatsReport:
     report = await source.fetch_port_stats()
     await repository.save(report)
-    if observer is not None:
-        await observer.observe(report)
+    for observer in observers:
+        await _observe(observer, report)
     return report
+
+
+async def _observe(observer: PortStatsObserver, report: PortStatsReport) -> None:
+    try:
+        await observer.observe(report)
+    except (httpx2.HTTPError, AlertWriteError):
+        logger.exception("observer %s failed", type(observer).__name__)
 
 
 async def run_polling(
@@ -39,12 +47,12 @@ async def run_polling(
     *,
     interval_seconds: float,
     stop: asyncio.Event,
-    observer: PortStatsObserver | None = None,
+    observers: Sequence[PortStatsObserver] = (),
 ) -> None:
     while not stop.is_set():
         try:
-            await poll_once(source, repository, observer)
-        except (httpx2.HTTPError, ValidationError, PortStatsWriteError, AlertWriteError):
+            await poll_once(source, repository, observers)
+        except (httpx2.HTTPError, ValidationError, PortStatsWriteError):
             logger.exception("polling cycle failed")
         with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(stop.wait(), timeout=interval_seconds)

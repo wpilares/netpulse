@@ -235,7 +235,7 @@ Alert events leave the collector through routes, matched in pure code (`netpulse
 
 A route with a `webhook_url` receives one POST per cycle with its matching events (`{"events": [{"kind": "opened", "alert": {...}}]}`, where `alert` carries the REST fields minus `id`, `seq`, `acknowledged_at` and `updated_at`, and `dpid` is a JSON number); a route without one logs them. The same event can reach several routes, a failing route is logged without its URL and never blocks the others, and `refreshed` and `suppressed` events stay inside the collector unless a route lists them. An empty `metrics` or `kinds` list, or malformed JSON, stops the collector at startup rather than creating a route that matches nothing. With neither variable set, every event is logged.
 
-The collector also deletes resolved alerts older than `COLLECTOR_ALERT_RETENTION_DAYS` (7 days) once every `NETPULSE_COLLECTOR_ALERT_RETENTION_EVERY_CYCLES` poll cycles (720, one hour at 5 s polling), logging how many rows it removed; open alerts are never touched. The purge runs with detection, so `COLLECTOR_DETECTION_ENABLED=false` also switches it off.
+The collector also deletes resolved alerts older than `COLLECTOR_ALERT_RETENTION_DAYS` (7 days) once every `NETPULSE_COLLECTOR_ALERT_RETENTION_EVERY_CYCLES` poll cycles (720, one hour at 5 s polling), logging how many rows it removed; open alerts are never touched. The purge is its own observer next to detection, so it keeps running with `COLLECTOR_DETECTION_ENABLED=false` whenever the collector writes to TimescaleDB.
 
 ### Data model
 
