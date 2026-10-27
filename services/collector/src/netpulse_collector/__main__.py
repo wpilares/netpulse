@@ -21,9 +21,10 @@ from netpulse_collector.alerts import (
     LoggingBaselineRepository,
 )
 from netpulse_collector.controller_client import ControllerClient
-from netpulse_collector.detector import AlertRetention, AnomalyDetector, DetectionObserver
+from netpulse_collector.detector import AnomalyDetector, DetectionObserver
 from netpulse_collector.poller import PortStatsObserver, run_polling
 from netpulse_collector.repository import LoggingPortStatsRepository, PortStatsRepository
+from netpulse_collector.retention import RetentionObserver
 from netpulse_collector.retry import RetryingPortStatsRepository, RetryPolicy
 from netpulse_collector.routing import RoutingAlertNotifier
 from netpulse_collector.settings import CollectorSettings
@@ -91,11 +92,26 @@ async def open_notifier(settings: CollectorSettings) -> AsyncIterator[AlertNotif
         yield RoutingAlertNotifier(routes, webhooks)
 
 
-async def build_observer(
+async def build_observers(
     settings: CollectorSettings, repositories: Repositories, notifier: AlertNotifier
-) -> PortStatsObserver | None:
-    if not settings.detection_enabled:
-        return None
+) -> tuple[PortStatsObserver, ...]:
+    observers: list[PortStatsObserver] = []
+    if settings.detection_enabled:
+        observers.append(await build_detection_observer(settings, repositories, notifier))
+    if settings.repository == "timescale":
+        observers.append(
+            RetentionObserver(
+                repositories.alerts,
+                older_than=timedelta(days=settings.alert_retention_days),
+                every_cycles=settings.alert_retention_every_cycles,
+            )
+        )
+    return tuple(observers)
+
+
+async def build_detection_observer(
+    settings: CollectorSettings, repositories: Repositories, notifier: AlertNotifier
+) -> DetectionObserver:
     detector = AnomalyDetector(
         config=settings.detection_config(),
         policy=settings.alert_policy(),
@@ -103,12 +119,8 @@ async def build_observer(
     )
     await seed_open_alerts(detector, repositories.alerts)
     await seed_baselines(detector, repositories.baselines)
-    retention = AlertRetention(
-        older_than=timedelta(days=settings.alert_retention_days),
-        every_cycles=settings.alert_retention_every_cycles,
-    )
     return DetectionObserver(
-        detector, repositories.alerts, notifier, retention, baselines=repositories.baselines
+        detector, repositories.alerts, notifier, baselines=repositories.baselines
     )
 
 
@@ -151,7 +163,7 @@ async def serve(settings: CollectorSettings) -> None:
             repositories.port_stats,
             interval_seconds=settings.poll_interval_seconds,
             stop=stop,
-            observer=await build_observer(settings, repositories, notifier),
+            observers=await build_observers(settings, repositories, notifier),
         )
 
 

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Callable
 
 import httpx2
@@ -135,11 +136,31 @@ async def test_poll_once_notifies_the_observer_after_saving() -> None:
     observer = RecordingObserver(repository)
 
     report = await poll_once(
-        _client(lambda _: httpx2.Response(200, json=REPORT_PAYLOAD)), repository, observer
+        _client(lambda _: httpx2.Response(200, json=REPORT_PAYLOAD)), repository, [observer]
     )
 
     assert observer.observed == [report]
     assert observer.saved_before_observe == [1]
+
+
+async def test_poll_once_notifies_every_observer_in_order() -> None:
+    repository = RecordingRepository()
+    order: list[str] = []
+
+    class NamedObserver:
+        def __init__(self, name: str) -> None:
+            self._name = name
+
+        async def observe(self, report: PortStatsReport) -> None:
+            order.append(self._name)
+
+    await poll_once(
+        _client(lambda _: httpx2.Response(200, json=REPORT_PAYLOAD)),
+        repository,
+        [NamedObserver("detection"), NamedObserver("retention")],
+    )
+
+    assert order == ["detection", "retention"]
 
 
 async def test_poll_once_skips_the_observer_when_saving_fails() -> None:
@@ -148,7 +169,7 @@ async def test_poll_once_skips_the_observer_when_saving_fails() -> None:
 
     with pytest.raises(PortStatsWriteError):
         await poll_once(
-            _client(lambda _: httpx2.Response(200, json=REPORT_PAYLOAD)), repository, observer
+            _client(lambda _: httpx2.Response(200, json=REPORT_PAYLOAD)), repository, [observer]
         )
 
     assert observer.observed == []
@@ -175,10 +196,40 @@ async def test_run_polling_survives_observer_failures() -> None:
 
     await asyncio.wait_for(
         run_polling(
-            _client(handler), repository, interval_seconds=0.01, stop=stop, observer=observer
+            _client(handler), repository, interval_seconds=0.01, stop=stop, observers=[observer]
         ),
         timeout=1,
     )
 
     assert len(repository.saved) == 2
     assert observer.calls == 2
+
+
+async def test_run_polling_still_notifies_the_observers_after_a_failing_one(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repository = RecordingRepository()
+    failing = FailingObserver()
+    recording = RecordingObserver(repository)
+    stop = asyncio.Event()
+
+    def handler(_: httpx2.Request) -> httpx2.Response:
+        if failing.calls == 1:
+            stop.set()
+        return httpx2.Response(200, json=REPORT_PAYLOAD)
+
+    with caplog.at_level(logging.ERROR, logger="netpulse_collector.poller"):
+        await asyncio.wait_for(
+            run_polling(
+                _client(handler),
+                repository,
+                interval_seconds=0.01,
+                stop=stop,
+                observers=[failing, recording],
+            ),
+            timeout=1,
+        )
+
+    assert failing.calls == 2
+    assert recording.observed == repository.saved
+    assert caplog.text.count("observer FailingObserver failed") == 2

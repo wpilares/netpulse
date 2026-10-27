@@ -1,7 +1,7 @@
 import logging
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from netpulse_collector.alerts import (
     AlertNotifier,
@@ -162,29 +162,20 @@ def _baseline_keys(port: PortKey) -> tuple[BaselineKey, ...]:
     return tuple((dpid, port_no, metric) for metric in METRICS)
 
 
-@dataclass(frozen=True, slots=True)
-class AlertRetention:
-    older_than: timedelta
-    every_cycles: int
-
-
 class DetectionObserver:
     def __init__(
         self,
         detector: AnomalyDetector,
         repository: AlertRepository,
         notifier: AlertNotifier,
-        retention: AlertRetention | None = None,
         *,
         baselines: BaselineRepository | None = None,
     ) -> None:
         self._detector = detector
         self._repository = repository
         self._notifier = notifier
-        self._retention = retention
         self._baselines = baselines
         self._pending_prunes: set[BaselineKey] = set()
-        self._cycles = 0
 
     async def observe(self, report: PortStatsReport) -> None:
         result = self._detector.observe_cycle(report)
@@ -192,7 +183,6 @@ class DetectionObserver:
             await self._store(result.events)
             await self._notifier.notify(result.events)
         await self._persist_baselines(result)
-        await self._purge_when_due()
 
     async def _persist_baselines(self, result: ObservationResult) -> None:
         if self._baselines is None:
@@ -228,16 +218,3 @@ class DetectionObserver:
             await self._repository.apply(events)
         except AlertWriteError:
             logger.exception("storing %d alert events failed", len(events))
-
-    async def _purge_when_due(self) -> None:
-        if self._retention is None:
-            return
-        self._cycles += 1
-        if self._cycles % self._retention.every_cycles:
-            return
-        try:
-            purged = await self._repository.purge_resolved(self._retention.older_than)
-        except AlertWriteError:
-            logger.exception("purging resolved alerts failed")
-            return
-        logger.info("purged %d resolved alerts older than %s", purged, self._retention.older_than)
