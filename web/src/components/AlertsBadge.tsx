@@ -1,5 +1,6 @@
 import type { AlertSummary } from "../features/alerts/alerts";
 import type { Tone } from "./tone";
+import { StatusPill } from "./ui/StatusPill";
 
 export interface AlertsBadgeProps {
   readonly summary: AlertSummary;
@@ -24,11 +25,5 @@ const describeAlerts = ({ open, critical }: AlertSummary): BadgeView => {
 
 export const AlertsBadge = ({ summary }: AlertsBadgeProps) => {
   const { tone, label, detail } = describeAlerts(summary);
-  return (
-    <output className="alerts-badge" data-tone={tone} aria-live="polite">
-      <span className="alerts-badge__dot" aria-hidden="true" />
-      <span className="alerts-badge__label">{label}</span>
-      {detail === null ? null : <span className="alerts-badge__detail">{detail}</span>}
-    </output>
-  );
+  return <StatusPill tone={tone} label={label} detail={detail} pulse={tone === "critical"} />;
 };

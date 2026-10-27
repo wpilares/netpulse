@@ -54,69 +54,6 @@
   color: var(--muted);
 }
 
-.health-indicator,
-.connection-status,
-.alerts-badge {
-  display: inline-flex;
-  gap: 0.5rem;
-  align-items: center;
-  padding: 0.375rem 0.75rem;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: 0.875rem;
-  --tone: var(--neutral);
-}
-
-.health-indicator[data-tone="positive"],
-.connection-status[data-tone="positive"],
-.alerts-badge[data-tone="positive"] {
-  --tone: var(--positive);
-}
-
-.health-indicator[data-tone="warning"],
-.connection-status[data-tone="warning"],
-.alerts-badge[data-tone="warning"] {
-  --tone: var(--warning);
-}
-
-.health-indicator[data-tone="critical"],
-.connection-status[data-tone="critical"],
-.alerts-badge[data-tone="critical"] {
-  --tone: var(--critical);
-}
-
-.health-indicator__dot,
-.connection-status__dot,
-.alerts-badge__dot {
-  width: 0.5rem;
-  height: 0.5rem;
-  border-radius: 50%;
-  background: var(--tone);
-}
-
-.health-indicator__label,
-.connection-status__label,
-.alerts-badge__label {
-  font-weight: 600;
-}
-
-.health-indicator__detail,
-.connection-status__detail,
-.alerts-badge__detail {
-  color: var(--muted);
-}
-
-.alerts-badge[data-tone="critical"] .alerts-badge__dot {
-  animation: alerts-pulse 1.5s ease-in-out infinite;
-}
-
-@keyframes alerts-pulse {
-  50% {
-    opacity: 0.35;
-  }
-}
-
 .alerts {
   display: grid;
   gap: 0.75rem;
@@ -568,9 +505,5 @@
   .topology__edge,
   .alert {
     transition: none;
-  }
-
-  .alerts-badge[data-tone="critical"] .alerts-badge__dot {
-    animation: none;
   }
 }

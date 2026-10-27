@@ -1,6 +1,6 @@
+import type { Tone } from "../../components/tone";
+import { StatusPill } from "../../components/ui/StatusPill";
 import type { ApiHealth } from "./health";
-
-type Tone = "neutral" | "positive" | "warning" | "critical";
 
 interface IndicatorView {
   readonly tone: Tone;
@@ -30,11 +30,5 @@ export interface HealthIndicatorProps {
 
 export const HealthIndicator = ({ health }: HealthIndicatorProps) => {
   const { tone, label, detail } = describeHealth(health);
-  return (
-    <output className="health-indicator" data-tone={tone} aria-live="polite">
-      <span className="health-indicator__dot" aria-hidden="true" />
-      <span className="health-indicator__label">{label}</span>
-      {detail === null ? null : <span className="health-indicator__detail">{detail}</span>}
-    </output>
-  );
+  return <StatusPill tone={tone} label={label} detail={detail} />;
 };
