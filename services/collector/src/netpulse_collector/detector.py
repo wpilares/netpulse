@@ -3,8 +3,14 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from netpulse_collector.alerts import AlertNotifier, AlertRepository, AlertWriteError
+from netpulse_collector.alerts import (
+    AlertNotifier,
+    AlertRepository,
+    AlertWriteError,
+    BaselineRepository,
+)
 from netpulse_core import (
+    METRICS,
     AlertEvent,
     AlertKey,
     AlertPolicy,
@@ -12,6 +18,7 @@ from netpulse_core import (
     AnomalySignal,
     Baseline,
     BaselineKey,
+    Baselines,
     DatapathId,
     DetectionConfig,
     PortNumber,
@@ -34,6 +41,13 @@ DEFAULT_PRUNE_AFTER_CYCLES = 60
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+@dataclass(frozen=True, slots=True)
+class ObservationResult:
+    events: tuple[AlertEvent, ...]
+    updated_baselines: dict[BaselineKey, Baseline]
+    pruned_keys: tuple[BaselineKey, ...]
 
 
 class AnomalyDetector:
@@ -60,33 +74,52 @@ class AnomalyDetector:
         for state in states:
             self._states[state.key] = state
 
+    def seed_baselines(self, baselines: Baselines) -> None:
+        self._baselines.update(baselines)
+
     def observe(self, report: PortStatsReport) -> tuple[AlertEvent, ...]:
+        return self.observe_cycle(report).events
+
+    def observe_cycle(self, report: PortStatsReport) -> ObservationResult:
         signals: list[AnomalySignal] = []
         seen: set[PortKey] = set()
+        updated: dict[BaselineKey, Baseline] = {}
         for switch in report.switches:
             for sample in port_samples(switch):
                 seen.add((sample.dpid, sample.stats.port_no))
-                signals.extend(self._score(sample))
-        self._prune_vanished_ports(seen)
+                port_signals, port_baselines = self._score(sample)
+                signals.extend(port_signals)
+                updated.update(port_baselines)
+        pruned = self._prune_vanished_ports(seen)
         self._states, events = evaluate_alerts(
             self._states, signals, now=self._report_time(report), policy=self._policy
         )
-        return events
+        return ObservationResult(events, updated, pruned)
 
-    def _score(self, sample: PortSample) -> tuple[AnomalySignal, ...]:
+    def _score(
+        self, sample: PortSample
+    ) -> tuple[tuple[AnomalySignal, ...], dict[BaselineKey, Baseline]]:
         port_no = sample.stats.port_no
         if is_reserved_port(port_no):
-            return ()
+            return (), {}
         key: PortKey = (sample.dpid, port_no)
         previous = self._samples.get(key)
         self._samples[key] = sample
         if previous is None:
-            return ()
+            return (), {}
         kpis = compute_port_kpis(previous, sample, link_capacity_bps=self._link_capacity_bps)
-        self._baselines, signals = detect_port_anomalies(self._baselines, kpis, self._config)
-        return signals
+        before = self._baselines
+        self._baselines, signals = detect_port_anomalies(before, kpis, self._config)
+        updated = {
+            baseline_key: baseline
+            for baseline_key in _baseline_keys(key)
+            if (baseline := self._baselines.get(baseline_key)) is not None
+            and before.get(baseline_key) != baseline
+        }
+        return signals, updated
 
-    def _prune_vanished_ports(self, seen: set[PortKey]) -> None:
+    def _prune_vanished_ports(self, seen: set[PortKey]) -> tuple[BaselineKey, ...]:
+        pruned: list[BaselineKey] = []
         for key in list(self._samples):
             if key in seen:
                 self._absent_cycles.pop(key, None)
@@ -97,15 +130,19 @@ class AnomalyDetector:
                 continue
             del self._samples[key]
             del self._absent_cycles[key]
-            self._baselines = {
-                baseline_key: baseline
-                for baseline_key, baseline in self._baselines.items()
-                if baseline_key[:2] != key
-            }
+            for baseline_key in _baseline_keys(key):
+                if self._baselines.pop(baseline_key, None) is not None:
+                    pruned.append(baseline_key)
+        return tuple(pruned)
 
     def _report_time(self, report: PortStatsReport) -> datetime:
         collected = [switch.collected_at for switch in report.switches]
         return max(collected) if collected else self._clock()
+
+
+def _baseline_keys(port: PortKey) -> tuple[BaselineKey, ...]:
+    dpid, port_no = port
+    return tuple((dpid, port_no, metric) for metric in METRICS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,19 +158,34 @@ class DetectionObserver:
         repository: AlertRepository,
         notifier: AlertNotifier,
         retention: AlertRetention | None = None,
+        *,
+        baselines: BaselineRepository | None = None,
     ) -> None:
         self._detector = detector
         self._repository = repository
         self._notifier = notifier
         self._retention = retention
+        self._baselines = baselines
         self._cycles = 0
 
     async def observe(self, report: PortStatsReport) -> None:
-        events = self._detector.observe(report)
-        if events:
-            await self._store(events)
-            await self._notifier.notify(events)
+        result = self._detector.observe_cycle(report)
+        if result.events:
+            await self._store(result.events)
+            await self._notifier.notify(result.events)
+        await self._persist_baselines(result)
         await self._purge_when_due()
+
+    async def _persist_baselines(self, result: ObservationResult) -> None:
+        if self._baselines is None:
+            return
+        try:
+            if result.updated_baselines:
+                await self._baselines.save(result.updated_baselines)
+            if result.pruned_keys:
+                await self._baselines.delete(result.pruned_keys)
+        except AlertWriteError:
+            logger.exception("persisting baselines failed")
 
     async def _store(self, events: tuple[AlertEvent, ...]) -> None:
         try:

@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -7,9 +7,12 @@ import pytest
 from netpulse_collector.alerts import AlertWriteError
 from netpulse_collector.detector import AlertRetention, AnomalyDetector, DetectionObserver
 from netpulse_core import (
+    METRICS,
     AlertEvent,
     AlertPolicy,
     AlertState,
+    Baseline,
+    BaselineKey,
     DetectionConfig,
     PortStats,
     PortStatsReport,
@@ -220,6 +223,64 @@ def test_reserved_ports_are_ignored() -> None:
     assert events == ()
 
 
+def _port_keys(port_no: int) -> set[BaselineKey]:
+    return {(1, port_no, metric) for metric in METRICS}
+
+
+def test_first_sample_of_a_port_touches_no_baseline() -> None:
+    detector = _detector()
+
+    result = detector.observe_cycle(_report(1))
+
+    assert result.events == ()
+    assert result.updated_baselines == {}
+    assert result.pruned_keys == ()
+
+
+def test_each_cycle_reports_the_baselines_it_updated() -> None:
+    detector = _detector()
+    detector.observe_cycle(_report(1))
+
+    first = detector.observe_cycle(_report(2))
+    second = detector.observe_cycle(_report(3, ports=[_port(1, 3), _port(2, 3)]))
+
+    assert set(first.updated_baselines) == _port_keys(1)
+    assert {baseline.samples for baseline in first.updated_baselines.values()} == {1}
+    assert first.updated_baselines[(1, 1, "rx_bps")].mean == pytest.approx(
+        STEADY_BYTES_PER_INTERVAL * 8 / INTERVAL
+    )
+    assert set(second.updated_baselines) == _port_keys(1)
+    assert {baseline.samples for baseline in second.updated_baselines.values()} == {2}
+
+
+def test_pruned_ports_report_their_baseline_keys() -> None:
+    detector = _detector(prune_after_cycles=1)
+    detector.observe_cycle(_report(1, ports=[_port(1, 1), _port(2, 1)]))
+    detector.observe_cycle(_report(2, ports=[_port(1, 2), _port(2, 2)]))
+
+    within_window = detector.observe_cycle(_report(3))
+    past_window = detector.observe_cycle(_report(4))
+
+    assert within_window.pruned_keys == ()
+    assert set(past_window.pruned_keys) == _port_keys(2)
+    assert set(past_window.updated_baselines) == _port_keys(1)
+
+
+def test_seeded_baselines_skip_the_warm_up() -> None:
+    detector = _detector()
+    warm = Baseline(mean=STEADY_BYTES_PER_INTERVAL * 8 / INTERVAL, variance=0.0, samples=WARMUP)
+    detector.seed_baselines({(1, 1, "rx_bps"): warm, (1, 1, "tx_bps"): warm})
+    detector.observe_cycle(_report(1))
+
+    result = detector.observe_cycle(_report(2, ports=[_port(1, 2, extra_rx_bytes=SPIKE_BYTES)]))
+
+    assert [(event.kind, event.state.key) for event in result.events] == [
+        ("opened", (1, 1, "rx_bps"))
+    ]
+    assert result.updated_baselines[(1, 1, "tx_bps")].samples == WARMUP + 1
+    assert result.updated_baselines[(1, 1, "drop_rate")].samples == 1
+
+
 def test_empty_report_resolves_with_the_clock() -> None:
     cycle = WARMUP + 2
     later = T0 + timedelta(seconds=INTERVAL * cycle + POLICY.resolve_after_seconds)
@@ -269,6 +330,32 @@ class RecordingAlertNotifier:
 
     async def notify(self, events: Sequence[AlertEvent]) -> None:
         self.notified.append(events)
+
+
+class RecordingBaselineRepository:
+    def __init__(self) -> None:
+        self.saved: list[dict[BaselineKey, Baseline]] = []
+        self.deleted: list[tuple[BaselineKey, ...]] = []
+
+    async def load(self) -> dict[BaselineKey, Baseline]:
+        return {}
+
+    async def save(self, baselines: Mapping[BaselineKey, Baseline]) -> None:
+        self.saved.append(dict(baselines))
+
+    async def delete(self, keys: Iterable[BaselineKey]) -> None:
+        self.deleted.append(tuple(keys))
+
+
+class FailingBaselineRepository:
+    async def load(self) -> dict[BaselineKey, Baseline]:
+        return {}
+
+    async def save(self, baselines: Mapping[BaselineKey, Baseline]) -> None:
+        raise AlertWriteError("baselines table unavailable")
+
+    async def delete(self, keys: Iterable[BaselineKey]) -> None:
+        raise AlertWriteError("baselines table locked")
 
 
 def _alerting_detector() -> tuple[AnomalyDetector, PortStatsReport]:
@@ -330,6 +417,44 @@ async def test_observer_purges_resolved_alerts_every_n_cycles(
 
     assert repository.purged == [timedelta(days=7), timedelta(days=7)]
     assert caplog.text.count("purged 2 resolved alerts") == 2
+
+
+async def test_observer_saves_touched_baselines_and_deletes_pruned_ones() -> None:
+    baselines = RecordingBaselineRepository()
+    observer = DetectionObserver(
+        _detector(prune_after_cycles=1),
+        RecordingAlertRepository(),
+        RecordingAlertNotifier(),
+        baselines=baselines,
+    )
+
+    await observer.observe(_report(1, ports=[_port(1, 1), _port(2, 1)]))
+    await observer.observe(_report(2, ports=[_port(1, 2), _port(2, 2)]))
+    await observer.observe(_report(3))
+    await observer.observe(_report(4))
+
+    assert [set(saved) for saved in baselines.saved] == [
+        _port_keys(1) | _port_keys(2),
+        _port_keys(1),
+        _port_keys(1),
+    ]
+    assert [set(deleted) for deleted in baselines.deleted] == [_port_keys(2)]
+
+
+async def test_observer_logs_baseline_failures_and_keeps_polling(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    detector, spike = _alerting_detector()
+    notifier = RecordingAlertNotifier()
+    observer = DetectionObserver(
+        detector, RecordingAlertRepository(), notifier, baselines=FailingBaselineRepository()
+    )
+
+    with caplog.at_level(logging.ERROR, logger="netpulse_collector.detector"):
+        await observer.observe(spike)
+
+    assert len(notifier.notified) == 1
+    assert "baselines table unavailable" in caplog.text
 
 
 async def test_observer_without_retention_never_purges() -> None:

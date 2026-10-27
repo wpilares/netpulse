@@ -15,8 +15,10 @@ from netpulse_collector.alerts import (
     AlertNotifier,
     AlertReadError,
     AlertRepository,
+    BaselineRepository,
     LoggingAlertNotifier,
     LoggingAlertRepository,
+    LoggingBaselineRepository,
 )
 from netpulse_collector.controller_client import ControllerClient
 from netpulse_collector.detector import AlertRetention, AnomalyDetector, DetectionObserver
@@ -26,6 +28,7 @@ from netpulse_collector.retry import RetryingPortStatsRepository, RetryPolicy
 from netpulse_collector.routing import RoutingAlertNotifier
 from netpulse_collector.settings import CollectorSettings
 from netpulse_collector.timescale_alerts import TimescaleAlertRepository
+from netpulse_collector.timescale_baselines import TimescaleBaselineRepository
 from netpulse_collector.timescale_repository import TimescalePortStatsRepository
 from netpulse_collector.webhook import WebhookAlertNotifier
 from netpulse_core.settings import quiet_http_client_logging
@@ -39,12 +42,15 @@ POOL_CONNECTION_TIMEOUT_SECONDS = 5.0
 class Repositories:
     port_stats: PortStatsRepository
     alerts: AlertRepository
+    baselines: BaselineRepository
 
 
 @asynccontextmanager
 async def open_repositories(settings: CollectorSettings) -> AsyncIterator[Repositories]:
     if settings.repository == "log" or settings.database_url is None:
-        yield Repositories(LoggingPortStatsRepository(), LoggingAlertRepository())
+        yield Repositories(
+            LoggingPortStatsRepository(), LoggingAlertRepository(), LoggingBaselineRepository()
+        )
         return
     pool = AsyncConnectionPool[psycopg.AsyncConnection[TupleRow]](
         settings.database_url.encoded_string(),
@@ -65,6 +71,7 @@ async def open_repositories(settings: CollectorSettings) -> AsyncIterator[Reposi
                 ),
             ),
             alerts=TimescaleAlertRepository(pool),
+            baselines=TimescaleBaselineRepository(pool),
         )
 
 
@@ -95,11 +102,14 @@ async def build_observer(
         link_capacity_bps=settings.link_capacity_bps,
     )
     await seed_open_alerts(detector, repositories.alerts)
+    await seed_baselines(detector, repositories.baselines)
     retention = AlertRetention(
         older_than=timedelta(days=settings.alert_retention_days),
         every_cycles=settings.alert_retention_every_cycles,
     )
-    return DetectionObserver(detector, repositories.alerts, notifier, retention)
+    return DetectionObserver(
+        detector, repositories.alerts, notifier, retention, baselines=repositories.baselines
+    )
 
 
 async def seed_open_alerts(detector: AnomalyDetector, repository: AlertRepository) -> None:
@@ -110,6 +120,16 @@ async def seed_open_alerts(detector: AnomalyDetector, repository: AlertRepositor
         return
     detector.seed(states)
     logger.info("seeded detector with %d open alerts", len(states))
+
+
+async def seed_baselines(detector: AnomalyDetector, repository: BaselineRepository) -> None:
+    try:
+        baselines = await repository.load()
+    except AlertReadError:
+        logger.exception("loading baselines failed; starting with a fresh warm-up")
+        return
+    detector.seed_baselines(baselines)
+    logger.info("loaded %d baselines", len(baselines))
 
 
 async def serve(settings: CollectorSettings) -> None:

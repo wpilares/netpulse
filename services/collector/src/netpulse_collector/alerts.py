@@ -1,9 +1,9 @@
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import timedelta
 from typing import Protocol
 
-from netpulse_core import AlertEvent, AlertState
+from netpulse_core import AlertEvent, AlertState, Baseline, BaselineKey
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,14 @@ class AlertRepository(Protocol):
     async def apply(self, events: Sequence[AlertEvent]) -> None: ...
 
     async def purge_resolved(self, older_than: timedelta) -> int: ...
+
+
+class BaselineRepository(Protocol):
+    async def load(self) -> dict[BaselineKey, Baseline]: ...
+
+    async def save(self, baselines: Mapping[BaselineKey, Baseline]) -> None: ...
+
+    async def delete(self, keys: Iterable[BaselineKey]) -> None: ...
 
 
 class AlertNotifier(Protocol):
@@ -46,6 +54,17 @@ class LoggingAlertRepository:
 
     async def purge_resolved(self, older_than: timedelta) -> int:
         return 0
+
+
+class LoggingBaselineRepository:
+    async def load(self) -> dict[BaselineKey, Baseline]:
+        return {}
+
+    async def save(self, baselines: Mapping[BaselineKey, Baseline]) -> None:
+        logger.debug("skipping persistence of %d baselines", len(baselines))
+
+    async def delete(self, keys: Iterable[BaselineKey]) -> None:
+        logger.debug("skipping deletion of %d baselines", len(tuple(keys)))
 
 
 class LoggingAlertNotifier:
