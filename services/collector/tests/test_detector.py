@@ -20,7 +20,7 @@ T0 = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
 INTERVAL = 5
 WARMUP = 3
 CONFIG = DetectionConfig(warmup_samples=WARMUP)
-POLICY = AlertPolicy(resolve_after_seconds=10.0, cooldown_seconds=20.0)
+POLICY = AlertPolicy(resolve_after_seconds=10.0, cooldown_seconds=20.0, open_after_signals=1)
 RESERVED_PORT = 0xFFFFFFFE
 STEADY_BYTES_PER_INTERVAL = 1_000
 SPIKE_BYTES = 10_000_000
