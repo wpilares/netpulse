@@ -11,7 +11,7 @@ NetPulse emulates a software-defined network with Mininet, controls it with an O
 
 ![The dashboard during a host-down fault: a critical drop_rate alert opens on switch 3 port 3, stays open while the port counts drops and resolves about a minute after the fault clears](docs/images/dashboard-fault.gif)
 
-> **Status: v1.0.0, project complete.** NetPulse runs end to end from an emulated network to a live dashboard: faults injected on a schedule show up as counter changes, become KPIs, are scored against per-port baselines, open confirmed alerts that are stored, routed to webhooks and streamed to the browser, and resolve on their own once the fault clears. Every milestone is listed in the [changelog](CHANGELOG.md); possible extensions are listed in the [roadmap](#roadmap) and not planned.
+> **Status: v1.1.0, project complete, UI refreshed.** NetPulse runs end to end from an emulated network to a live dashboard: faults injected on a schedule show up as counter changes, become KPIs, are scored against per-port baselines, open confirmed alerts that are stored, routed to webhooks and streamed to the browser, and resolve on their own once the fault clears. v1.1 rebuilt the dashboard on a design system with light, dark and system themes and a typed data layer, with the same API contract. Every milestone is listed in the [changelog](CHANGELOG.md); possible extensions are listed in the [roadmap](#roadmap) and not planned.
 
 ## What the dashboard shows
 
@@ -24,6 +24,8 @@ NetPulse emulates a software-defined network with Mininet, controls it with an O
 | Switch ports | `kpis` frames | Per-port utilization, drop and error rates, packet rates and a receive/transmit throughput chart over the last 120 frames (about ten minutes) |
 
 Charts and the topology graph are hand-rolled SVG with no chart library. The first frame comes from `GET /api/v1/kpis/summary` and the first alert list from `GET /api/v1/alerts`; after that the client follows the WebSocket, reconnects with exponential backoff (1 s doubling to 30 s plus jitter) and pings every 15 s to keep proxies from idling the socket out. Host labels fall back to the switch port name facing the host (`s2-eth2`) until the host has sent its first ARP frame.
+
+The header carries a theme selector with light, dark and system modes; the choice is persisted in the browser and applied before the first paint, so a reload never flashes the other palette. The layout is responsive down to phone widths, and every panel shows a loading skeleton while its first data arrives, an empty state when there is nothing to show and an error state with a retry action when the API is unreachable.
 
 ![The full dashboard page while a host-down fault is open: header badges for API and database reachability, live status and one critical alert; network summary cards with throughput, utilization, drop and error rates, switches, ports and counter resets; the alerts panel with a single critical drop_rate alert on switch 3 port 3 showing its value, expected value, z-score, opening time and an acknowledge button; the tree topology of three switches and four hosts labelled by IP address with links colored by utilization; and the receive and transmit throughput charts of the two ports of switch 1](docs/images/dashboard-alerts.png)
 
@@ -58,7 +60,7 @@ Data flows left to right. The controller requests `OFPPortStatsRequest` from eve
 | Controller | `services/controller` | OS-Ken 4 (Python 3.13) | Tracks switches, installs forwarding, discovers links with LLDP and hosts from ARP, polls port stats, serves stats and topology over REST |
 | Collector | `services/collector` | asyncio, httpx2, psycopg 3 | Polls the controller, validates samples, writes them idempotently with retry and backoff, scores every port against its EWMA baseline, persists alerts and baselines, routes alert events to webhooks and purges old resolved alerts |
 | API | `services/api` | FastAPI, httpx2, psycopg 3, uvicorn | `/health`, port statistics, KPIs, topology, alerts and service info under `/api/v1`, `/ws/telemetry` WebSocket |
-| Web | `web` | Bun, Vite, React 19, TypeScript, Vitest, Biome | Live dashboard: KPI summary cards, alerts panel with acknowledge, topology graph, per-port throughput charts, reconnecting WebSocket client |
+| Web | `web` | Bun, Vite, React 19, TypeScript, axios, TanStack Query, zod, CSS Modules, Vitest, Biome | Live dashboard: KPI summary tiles, alerts panel with acknowledge, topology graph, per-port throughput charts, reconnecting WebSocket client feeding the query cache, light, dark and system themes |
 | Database | `db/migrations` | TimescaleDB 2.30 on PostgreSQL 18, dbmate | Hypertable, continuous aggregate, policies, the `alerts` table with its sequence cursor and the `alert_baselines` table as versioned SQL |
 
 ### Design decisions
@@ -72,6 +74,7 @@ Recorded as ADRs in [`docs/adr`](docs/adr):
 | [0007](docs/adr/0007-kpi-computation.md) | KPIs computed in core from consecutive samples, counter resets as `null` rates |
 | [0008](docs/adr/0008-anomaly-detection-and-alerting.md) | EWMA baselines with z-scores and floors, alert lifecycle, `alerts` table, cursor streaming, webhook notifier, fault injection and why `loss` and `host_down` leave different marks |
 | [0009](docs/adr/0009-alert-confirmation-persistence-and-routing.md) | Alerts confirmed by consecutive signals, floors as settings, `seq` cursor serialized by an advisory lock, baselines persisted every cycle, routing by severity, metric and kind, retention of resolved alerts |
+| [0010](docs/adr/0010-frontend-architecture.md) | Frontend: `ApiClient` port on axios with typed errors, zod at the boundary, TanStack Query as the server cache fed synchronously by the WebSocket, design tokens with `data-theme`, CSS Modules, atomic components and a container/view split |
 
 ## Run it locally
 
@@ -367,6 +370,7 @@ Run a single service against the Compose stack:
 ```sh
 NETPULSE_API_DATABASE_URL=postgresql://netpulse:change-me@localhost:5432/netpulse uv run netpulse-api
 cd web && bun run dev    # proxies /health, /api and /ws to http://localhost:8000
+cd web && bun run test   # vitest: components, hooks and the api client against a fake fetch
 ```
 
 Quality bar: no code comments, no `any` or untyped Python, zero lint and type errors, tests first for logic, Conventional Commits with one work unit per commit. See [`CLAUDE.md`](CLAUDE.md) for the full list of gates.
@@ -381,7 +385,7 @@ Quality bar: no code comments, no `any` or untyped Python, zero lint and type er
 │   ├── collector/           polling loop, controller client, detector, repository, baseline and notifier ports, TimescaleDB, routing and webhook adapters, Dockerfile
 │   └── controller/          standalone uv project: OS-Ken app, stats store, link and host discovery, REST, Dockerfile
 ├── network/                 Mininet topology spec, runner, traffic scheduler, fault injection, entrypoint, Dockerfile
-├── web/                     React dashboard, nginx config, Dockerfile
+├── web/                     React dashboard: api client and schemas, query hooks, design tokens, theme, ui components, feature panels, nginx config, Dockerfile
 ├── db/migrations/           dbmate SQL migrations: hypertable, continuous aggregate, policies, alerts and alert_baselines tables
 ├── docs/adr/                architecture decision records
 ├── docs/images/             dashboard screenshots
@@ -401,6 +405,7 @@ Quality bar: no code comments, no `any` or untyped Python, zero lint and type er
 | v0.4 | Anomaly detection and alerting: EWMA baselines with z-scores and floors, alert lifecycle with escalation, resolution and cooldown, `alerts` table, list and acknowledge endpoints, alert frames over the WebSocket, webhook notifier, dashboard alerts panel, scheduled `loss` and `host_down` faults, hosts labelled by IP, OpenFlow port speed | Done ([PR #4](https://github.com/wpilares/netpulse/pull/4)) |
 | v0.5 | Alert tuning, persistence and routing: alerts confirmed by consecutive signals, detection floors as settings with a 1 Mbit/s throughput floor, `seq` cursor serialized by an advisory lock, baselines persisted every cycle and reloaded at startup, alert routes by severity, metric and event kind, retention of resolved alerts, cleanup of vanished ports | Done ([PR #5](https://github.com/wpilares/netpulse/pull/5)) |
 | v1.0 | Release: retention of resolved alerts independent of detection, every package at 1.0.0, changelog, dashboard GIF, roadmap closed | Done ([PR #6](https://github.com/wpilares/netpulse/pull/6)) |
+| v1.1 | UI refresh: axios client with zod validation, TanStack Query cache fed by the WebSocket, design tokens with light, dark and system themes, reusable components, responsive layout, accessibility verified with axe | Done ([PR #7](https://github.com/wpilares/netpulse/pull/7)) |
 
 ### Possible extensions
 

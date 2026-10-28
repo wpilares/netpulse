@@ -1,6 +1,6 @@
 [project]
 name = "netpulse-network"
-version = "1.0.0"
+version = "1.1.0"
 description = "Mininet topology emulating the monitored NetPulse network"
 license = "MIT"
 requires-python = ">=3.13"

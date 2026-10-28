@@ -1,6 +1,28 @@
 # Changelog
 
-All notable changes to NetPulse, in [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) form. Versions before 1.0.0 were milestones delivered as one pull request each; 1.0.0 is the closed portfolio release, after which only possible extensions remain ([README roadmap](README.md#roadmap)).
+All notable changes to NetPulse, in [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) form. Versions before 1.0.0 were milestones delivered as one pull request each; 1.0.0 is the closed portfolio release; later versions refine it without changing the API contract, and possible extensions stay listed in the [README roadmap](README.md#roadmap).
+
+## [1.1.0] - 2026-10-27
+
+### Added
+
+- Theme selector with `light`, `dark` and `system` modes: the choice is persisted in `localStorage` under `netpulse.theme` and applied by an inline script before the first paint, so a reload never flashes the wrong palette.
+- Design tokens in `web/src/styles/tokens.css` (colour, spacing, type scale, radius, shadow, motion) and a set of reusable components under `web/src/components/ui`: `Button`, `Badge`, `Card`, `Pill`, `SegmentedControl`, `Switch`, `Skeleton`, `Icon`, `StatTile`, `StatusPill`, `EmptyState`, `ErrorState`, `ChartFrame` and `ThemeToggle`, each with its CSS Module and tests.
+- Loading skeletons, empty states and error states with a retry action on every panel; a responsive layout down to 390 px with an icon-only theme toggle that keeps its accessible names.
+- Visual and accessibility verification in both themes with Playwright and axe: no serious or critical violations.
+- ADR 0010 on the frontend architecture.
+
+### Changed
+
+- HTTP goes through an `ApiClient` port implemented with axios on the fetch adapter; failures are normalised into a typed `ApiError` (`network`, `not_found`, `unavailable`, `invalid`) and `GET /health` keeps reading a 503 body.
+- Every REST response and WebSocket frame is validated with zod schemas in `web/src/api/schemas.ts`; the exported types keep their names.
+- Server state lives in a TanStack Query cache: health polls every 10 s, topology every 30 s, the KPI summary and the open alerts load once over REST and are then fed by the WebSocket through a cache bridge; acknowledging an alert is an optimistic mutation with rollback.
+- Each feature is split into a container that owns its queries and a view that renders props; the global `styles.css` is replaced by tokens, `global.css` and one CSS Module per component, linted by Biome with `cssModules` enabled.
+- Every package reports `1.1.0`.
+
+### Fixed
+
+- A WebSocket `alerts` frame is written into the cache synchronously and cancels the in-flight REST list, so a REST response that resolves after the frame can no longer overwrite it.
 
 ## [1.0.0] - 2026-10-27
 
@@ -87,6 +109,7 @@ All notable changes to NetPulse, in [Keep a Changelog](https://keepachangelog.co
 - FastAPI service with `/health`, the `/api/v1` router and the `/ws/telemetry` WebSocket; React dashboard shell behind nginx.
 - Shared frozen pydantic models in `netpulse-core`; ruff, mypy strict, pytest, Biome, Vitest and GitHub Actions CI.
 
+[1.1.0]: https://github.com/wpilares/netpulse/pull/7
 [1.0.0]: https://github.com/wpilares/netpulse/pull/6
 [0.5.0]: https://github.com/wpilares/netpulse/pull/5
 [0.4.0]: https://github.com/wpilares/netpulse/pull/4
